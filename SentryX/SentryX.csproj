@@ -7,7 +7,20 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
 	<UseWindowsForms>true</UseWindowsForms>
+	<!-- 版本資訊 -->
+	<Version>1.0.0</Version>
+	<AssemblyVersion>1.0.0.0</AssemblyVersion>
+	<FileVersion>1.0.0.0</FileVersion>
+
+	<!-- 作者/公司資訊 -->
+	<Authors>張小麟</Authors>
+	<Company>MyCompany</Company>
+	<Product>SentryX CMS</Product>
+	<Description>Pre-Alpha</Description>
+	<Copyright>Copyright © 2025 SentryX</Copyright>
   </PropertyGroup>
+	
+
 
   <ItemGroup>
     <ProjectReference Include="..\NetSDKCS\NetSDKCS.csproj" />

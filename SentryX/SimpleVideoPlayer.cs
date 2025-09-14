@@ -1,35 +1,14 @@
 ﻿// SimpleVideoPlayer.cs - 極簡視頻播放器
-// 這個檔案負責播放攝影機的視頻，支援不同的解碼模式
+// 這個檔案負責播放攝影機的視頻，支援不同的解碼模式和碼流類型
 
 using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using NetSDKCS;
+using System.Threading;
 
 namespace SentryX
 {
-    /// <summary>
-    /// 解碼模式 - 告訴播放器用什麼方式解碼視頻
-    /// </summary>
-    public enum DecodeMode
-    {
-        /// <summary>
-        /// 自動選擇 - 先試GPU硬體解碼，不行再用CPU軟體解碼
-        /// </summary>
-        Auto,
-
-        /// <summary>
-        /// 軟體解碼 - 用電腦CPU來解碼，比較慢但相容性最好
-        /// </summary>
-        Software,
-
-        /// <summary>
-        /// 硬體解碼 - 用顯示卡GPU來解碼，很快但可能不相容某些設備
-        /// </summary>
-        Hardware
-    }
-
-
     /// <summary>
     /// 極簡視頻播放器 - 專門播放大華攝影機的視頻
     /// </summary>
@@ -68,9 +47,39 @@ namespace SentryX
         private fRealDataCallBackEx2 _dataCallback;
 
         /// <summary>
-        /// 當前使用的解碼模式 - 記住用戶選擇了哪種解碼方式
+        /// 當前使用的解碼模式 - 記住用戶選擇了哪種解碼方式（預設為軟體解碼）
         /// </summary>
-        private DecodeMode _decodeMode = DecodeMode.Auto;
+        private DecodeMode _decodeMode = DecodeMode.Software;
+
+        /// <summary>
+        /// 當前使用的碼流類型
+        /// </summary>
+        private VideoStreamType _streamType = VideoStreamType.Main;
+
+        /// <summary>
+        /// 視頻資訊 - 用於監控性能
+        /// </summary>
+        public VideoInfo? CurrentVideoInfo { get; private set; }
+
+        /// <summary>
+        /// 緩衝區重置計數器 - 用於監控緩衝區重置頻率
+        /// </summary>
+        private int _bufferResetCount = 0;
+
+        /// <summary>
+        /// 最後一次緩衝區重置時間
+        /// </summary>
+        private DateTime _lastBufferResetTime = DateTime.MinValue;
+
+        /// <summary>
+        /// 數據接收計數器 - 用於監控數據流
+        /// </summary>
+        private long _dataReceiveCount = 0;
+
+        /// <summary>
+        /// 連續錯誤計數器
+        /// </summary>
+        private int _consecutiveErrorCount = 0;
 
         // === 靜態變數：全部程式共用的資源 ===
 
@@ -84,16 +93,23 @@ namespace SentryX
         /// </summary>
         private static readonly object _initLock = new object();
 
+        /// <summary>
+        /// 全域播放器計數器 - 用於監控同時播放的數量
+        /// </summary>
+        private static int _globalPlayerCount = 0;
+
         // === 建構子：建立播放器時執行 ===
 
         /// <summary>
         /// 建立新的視頻播放器
         /// </summary>
-        /// <param name="decodeMode">指定要使用的解碼模式</param>
-        public SimpleVideoPlayer(DecodeMode decodeMode = DecodeMode.Auto)
+        /// <param name="decodeMode">指定要使用的解碼模式（預設為軟體解碼）</param>
+        /// <param name="streamType">指定要使用的碼流類型（預設為主碼流）</param>
+        public SimpleVideoPlayer(DecodeMode decodeMode = DecodeMode.Software, VideoStreamType streamType = VideoStreamType.Main)
         {
-            // 記住用戶選擇的解碼模式
+            // 記住用戶選擇的解碼模式和碼流類型
             _decodeMode = decodeMode;
+            _streamType = streamType;
 
             // 確保 Play SDK 已經初始化（全域只做一次）
             EnsureSDKInitialized();
@@ -101,7 +117,10 @@ namespace SentryX
             // 建立數據回調函數 - 當有視頻數據時會呼叫 OnVideoDataReceived
             _dataCallback = new fRealDataCallBackEx2(OnVideoDataReceived);
 
-            Debug.WriteLine($"SimpleVideoPlayer 已建立，解碼模式: {decodeMode}");
+            // 增加全域播放器計數
+            Interlocked.Increment(ref _globalPlayerCount);
+
+            Debug.WriteLine($"SimpleVideoPlayer 已建立，解碼模式: {decodeMode}, 碼流: {streamType}, 全域播放器數量: {_globalPlayerCount}");
         }
 
         // === 公開方法：使用者會呼叫的方法 ===
@@ -112,8 +131,9 @@ namespace SentryX
         /// <param name="deviceHandle">攝影機設備的登入句柄</param>
         /// <param name="channel">要播放的通道號（0=第1個通道）</param>
         /// <param name="windowHandle">要顯示視頻的窗口句柄</param>
+        /// <param name="deviceName">設備名稱（用於監控顯示）</param>
         /// <returns>是否成功開始播放</returns>
-        public bool StartPlay(IntPtr deviceHandle, int channel, IntPtr windowHandle)
+        public bool StartPlay(IntPtr deviceHandle, int channel, IntPtr windowHandle, string deviceName = "")
         {
             try
             {
@@ -124,23 +144,32 @@ namespace SentryX
                     return false;
                 }
 
-                // 第2步：如果已經在播放其他視頻，先停止
+                // 第2步：檢查全域播放器數量，避免過載
+                if (_globalPlayerCount > 32)
+                {
+                    Debug.WriteLine($"警告：當前播放器數量過多 ({_globalPlayerCount})，可能影響性能");
+                }
+
+                // 第3步：如果已經在播放其他視頻，先停止
                 if (_isPlaying)
                 {
                     StopPlay();
                 }
 
-                // 第3步：記住要在哪個窗口顯示視頻
+                // 第4步：記住要在哪個窗口顯示視頻
                 _displayHandle = windowHandle;
 
-                // 第4步：初始化 Play SDK 播放器（準備解碼環境）
+                // 第5步：初始化視頻資訊
+                InitializeVideoInfo(deviceName, channel);
+
+                // 第6步：初始化 Play SDK 播放器（準備解碼環境）
                 if (!InitializePlaySDK())
                 {
                     Debug.WriteLine("Play SDK 初始化失敗");
                     return false;
                 }
 
-                // 第5步：開始從大華攝影機接收數據
+                // 第7步：開始從大華攝影機接收數據
                 if (!StartReceiveData(deviceHandle, channel))
                 {
                     Debug.WriteLine("開始接收視頻數據失敗");
@@ -148,9 +177,10 @@ namespace SentryX
                     return false;
                 }
 
-                // 第6步：標記為正在播放
+                // 第8步：標記為正在播放
                 _isPlaying = true;
-                Debug.WriteLine($"視頻播放開始成功，通道: {channel}");
+                _consecutiveErrorCount = 0; // 重置錯誤計數器
+                Debug.WriteLine($"視頻播放開始成功，設備: {deviceName}, 通道: {channel}, 碼流: {_streamType}");
                 return true;
             }
             catch (Exception ex)
@@ -179,7 +209,10 @@ namespace SentryX
                 // 第2步：清理 Play SDK 資源
                 CleanupPlaySDK();
 
-                Debug.WriteLine("視頻播放已停止");
+                // 第3步：清理視頻資訊
+                CurrentVideoInfo = null;
+
+                Debug.WriteLine($"視頻播放已停止，緩衝區重置次數: {_bufferResetCount}, 數據接收次數: {_dataReceiveCount}");
             }
             catch (Exception ex)
             {
@@ -188,6 +221,36 @@ namespace SentryX
         }
 
         // === 私有方法：內部使用的方法，外部不能直接呼叫 ===
+
+        /// <summary>
+        /// 初始化視頻資訊
+        /// </summary>
+        private void InitializeVideoInfo(string deviceName, int channel)
+        {
+            CurrentVideoInfo = new VideoInfo
+            {
+                DeviceName = deviceName,
+                Channel = channel,
+                StreamType = _streamType,
+                StartTime = DateTime.Now,
+                LastUpdate = DateTime.Now,
+                TotalFrames = 0,
+                TotalBytes = 0,
+                
+                // 根據碼流類型設定預設解析度
+                Width = _streamType == VideoStreamType.Main ? 1920 : 704,
+                Height = _streamType == VideoStreamType.Main ? 1080 : 576,
+                
+                // 預估FPS和碼率（實際數值會在播放時更新）
+                Fps = _streamType == VideoStreamType.Main ? 25.0 : 15.0,
+                Bitrate = _streamType == VideoStreamType.Main ? 4000.0 : 512.0
+            };
+
+            // 重置統計計數器
+            _bufferResetCount = 0;
+            _dataReceiveCount = 0;
+            _lastBufferResetTime = DateTime.MinValue;
+        }
 
         /// <summary>
         /// 確保 Play SDK 已經初始化（全域只執行一次）
@@ -222,7 +285,7 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 初始化 Play SDK 播放器（每個播放器都要做）
+        /// 初始化 Play SDK 播放器（每個播放器都要做）- 優化多播放器支援
         /// </summary>
         /// <returns>是否初始化成功</returns>
         private bool InitializePlaySDK()
@@ -247,11 +310,11 @@ namespace SentryX
                 // 第3步：根據用戶選擇設定解碼引擎
                 SetupDecodeEngine();
 
-                // 第4步：開啟串流緩衝區（用來暫存視頻數據）
-                const uint bufferSize = 5 * 1024 * 1024; // 5MB 緩衝區
+                // 第4步：開啟串流緩衝區（調整緩衝區大小以支援多播放器）- 修正類型轉換
+                uint bufferSize = (uint)(_globalPlayerCount > 16 ? 2 * 1024 * 1024 : 5 * 1024 * 1024); // 多播放器時減少緩衝區
                 if (!PlaySDK.PLAY_OpenStream(_playPort, IntPtr.Zero, 0, bufferSize))
                 {
-                    Debug.WriteLine("開啟串流失敗");
+                    Debug.WriteLine($"開啟串流失敗，緩衝區大小: {bufferSize}");
                     return false;
                 }
 
@@ -262,7 +325,7 @@ namespace SentryX
                     return false;
                 }
 
-                Debug.WriteLine("Play SDK 播放器初始化完成");
+                Debug.WriteLine($"Play SDK 播放器初始化完成，緩衝區大小: {bufferSize}");
                 return true;
             }
             catch (Exception ex)
@@ -273,7 +336,7 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 根據用戶選擇設定解碼引擎
+        /// 根據用戶選擇設定解碼引擎 - 修改為優先軟體解碼
         /// </summary>
         private void SetupDecodeEngine()
         {
@@ -296,13 +359,13 @@ namespace SentryX
 
                 case DecodeMode.Auto:
                 default:
-                    // 自動選擇：先試硬體，不行再用軟體
-                    Debug.WriteLine("自動選擇解碼模式：先試硬體，再試軟體");
-                    success = TryHardwareDecoding();
+                    // 自動選擇：調整為先試軟體，再試硬體（考慮相容性）
+                    Debug.WriteLine("自動選擇解碼模式：先試軟體，再試硬體");
+                    success = TrySoftwareDecoding();
                     if (!success)
                     {
-                        Debug.WriteLine("硬體解碼失敗，改用軟體解碼");
-                        success = TrySoftwareDecoding();
+                        Debug.WriteLine("軟體解碼失敗，改用硬體解碼");
+                        success = TryHardwareDecoding();
                     }
                     break;
             }
@@ -354,7 +417,7 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 開始從大華攝影機接收視頻數據
+        /// 開始從大華攝影機接收視頻數據 - 支援碼流選擇
         /// </summary>
         /// <param name="deviceHandle">攝影機設備句柄</param>
         /// <param name="channel">通道號</param>
@@ -363,13 +426,18 @@ namespace SentryX
         {
             try
             {
+                // 根據碼流類型選擇相應的播放類型
+                EM_RealPlayType playType = _streamType == VideoStreamType.Main 
+                    ? EM_RealPlayType.EM_A_RType_Realplay_0      // 主碼流
+                    : EM_RealPlayType.EM_A_RType_Realplay_1;     // 輔碼流
+
                 // 開始即時播放（從大華攝影機取得數據）
                 // 注意：這裡的 hWnd 設為 IntPtr.Zero，因為我們用 Play SDK 來顯示
                 _realPlayHandle = NETClient.RealPlay(
-                    deviceHandle,                                 // 攝影機設備的登入句柄
+                    deviceHandle,                                 // 攝影機設備的登入句Handlesns
                     channel,                                      // 要播放的通道號
                     IntPtr.Zero,                                  // 不直接顯示到窗口
-                    EM_RealPlayType.EM_A_RType_Realplay_0        // 即時播放類型
+                    playType                                      // 播放類型（主碼流或輔碼流）
                 );
 
                 // 檢查是否成功開始接收數據
@@ -377,6 +445,13 @@ namespace SentryX
                 {
                     string error = NETClient.GetLastError();
                     Debug.WriteLine($"開始即時播放失敗：{error}");
+                    
+                    // 如果是連線失敗，可能是設備負載過重
+                    if (error.Contains("Failed to get connect session information"))
+                    {
+                        Debug.WriteLine($"設備連線會話信息獲取失敗，可能原因：設備負載過重或網路問題，當前全域播放器數量: {_globalPlayerCount}");
+                    }
+                    
                     return false;
                 }
 
@@ -393,7 +468,7 @@ namespace SentryX
                     return false;
                 }
 
-                Debug.WriteLine($"開始接收通道 {channel} 的視頻數據成功");
+                Debug.WriteLine($"開始接收通道 {channel} 的視頻數據成功（{_streamType}）");
                 return true;
             }
             catch (Exception ex)
@@ -446,15 +521,8 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 視頻數據回調函數 - 當收到視頻數據時自動呼叫
-        /// 這個方法會被 SDK 自動呼叫，我們不需要手動呼叫
+        /// 視頻數據回調函數 - 當收到視頻數據時自動呼叫並更新統計資訊
         /// </summary>
-        /// <param name="lRealHandle">播放句柄</param>
-        /// <param name="dwDataType">數據類型（1=檔頭資訊,2=視頻,3=音訊）</param>
-        /// <param name="pBuffer">數據緩衝區</param>
-        /// <param name="dwBufSize">數據大小</param>
-        /// <param name="param">參數（未使用）</param>
-        /// <param name="dwUser">用戶數據（未使用）</param>
         private void OnVideoDataReceived(IntPtr lRealHandle, uint dwDataType, IntPtr pBuffer, uint dwBufSize, IntPtr param, IntPtr dwUser)
         {
             try
@@ -465,6 +533,12 @@ namespace SentryX
                 // 檢查數據是否有效
                 if (pBuffer == IntPtr.Zero || dwBufSize == 0) return;
 
+                // 增加數據接收計數
+                Interlocked.Increment(ref _dataReceiveCount);
+
+                // 更新視頻統計資訊
+                UpdateVideoStatistics(dwBufSize, dwDataType);
+
                 // 將數據送給 Play SDK 進行解碼和顯示
                 bool result = PlaySDK.PLAY_InputData(_playPort, pBuffer, dwBufSize);
 
@@ -474,15 +548,82 @@ namespace SentryX
                     uint error = PlaySDK.PLAY_GetLastErrorEx();
                     if (error == PlaySDK.PLAY_BUF_OVER)
                     {
+                        // 增加緩衝區重置計數
+                        _bufferResetCount++;
+                        
+                        // 檢查重置頻率，如果過於頻繁則記錄警告
+                        var now = DateTime.Now;
+                        if (_lastBufferResetTime != DateTime.MinValue)
+                        {
+                            var timeSinceLastReset = (now - _lastBufferResetTime).TotalSeconds;
+                            if (timeSinceLastReset < 1.0) // 1秒內重置多次
+                            {
+                                Debug.WriteLine($"警告：緩衝區重置過於頻繁，時間間隔: {timeSinceLastReset:F2}秒，總重置次數: {_bufferResetCount}");
+                            }
+                        }
+                        _lastBufferResetTime = now;
+
                         // 緩衝區滿了，重置一下（清空緩衝區）
                         PlaySDK.PLAY_ResetSourceBuffer(_playPort);
-                        Debug.WriteLine("Play SDK 緩衝區已重置");
+                        
+                        // 只有在重置次數較少時才記錄
+                        if (_bufferResetCount % 10 == 0) // 每10次重置才記錄一次
+                        {
+                            Debug.WriteLine($"Play SDK 緩衝區已重置 (第{_bufferResetCount}次)，全域播放器數量: {_globalPlayerCount}");
+                        }
                     }
+                    else
+                    {
+                        _consecutiveErrorCount++;
+                        if (_consecutiveErrorCount > 10)
+                        {
+                            Debug.WriteLine($"連續輸入數據失敗，錯誤代碼: {error}，連續錯誤次數: {_consecutiveErrorCount}");
+                        }
+                    }
+                }
+                else
+                {
+                    _consecutiveErrorCount = 0; // 成功時重置錯誤計數器
                 }
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"處理視頻數據時異常：{ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 更新視頻統計資訊
+        /// </summary>
+        private void UpdateVideoStatistics(uint dataSize, uint dataType)
+        {
+            if (CurrentVideoInfo == null) return;
+
+            try
+            {
+                // 累加數據量
+                CurrentVideoInfo.TotalBytes += dataSize;
+
+                // 如果是視頻幀數據，增加幀計數
+                if (dataType == 2) // 2 = 視頻數據
+                {
+                    CurrentVideoInfo.TotalFrames++;
+                }
+
+                // 更新時間戳
+                CurrentVideoInfo.LastUpdate = DateTime.Now;
+
+                // 每秒更新一次計算結果
+                var elapsed = (DateTime.Now - CurrentVideoInfo.StartTime).TotalSeconds;
+                if (elapsed >= 1.0)
+                {
+                    CurrentVideoInfo.Fps = CurrentVideoInfo.CalculateActualFps();
+                    CurrentVideoInfo.Bitrate = CurrentVideoInfo.CalculateActualBitrate();
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"更新視頻統計時發生異常：{ex.Message}");
             }
         }
 
@@ -496,8 +637,12 @@ namespace SentryX
             if (!_disposed)
             {
                 StopPlay();
+                
+                // 減少全域播放器計數
+                Interlocked.Decrement(ref _globalPlayerCount);
+                
                 _disposed = true;
-                Debug.WriteLine("SimpleVideoPlayer 已銷毀");
+                Debug.WriteLine($"SimpleVideoPlayer 已銷毀，剩餘全域播放器數量: {_globalPlayerCount}");
             }
         }
 
@@ -507,6 +652,31 @@ namespace SentryX
         /// 是否正在播放
         /// </summary>
         public bool IsPlaying => _isPlaying;
+
+        /// <summary>
+        /// 當前碼流類型
+        /// </summary>
+        public VideoStreamType StreamType => _streamType;
+
+        /// <summary>
+        /// 當前解碼模式
+        /// </summary>
+        public DecodeMode DecodeMode => _decodeMode;
+
+        /// <summary>
+        /// 緩衝區重置次數
+        /// </summary>
+        public int BufferResetCount => _bufferResetCount;
+
+        /// <summary>
+        /// 數據接收次數
+        /// </summary>
+        public long DataReceiveCount => _dataReceiveCount;
+
+        /// <summary>
+        /// 全域播放器數量
+        /// </summary>
+        public static int GlobalPlayerCount => _globalPlayerCount;
 
         /// <summary>
         /// 全域清理 Play SDK（程式結束時呼叫）

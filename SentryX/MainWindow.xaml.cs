@@ -3,12 +3,15 @@
 
 // 引用必要的程式庫
 using System;                               // 基本系統功能
+using System.Collections.Generic;           // 集合類型
+using System.Diagnostics;                   // 性能監控
 using System.Linq;                          // LINQ 查詢功能
 using System.Windows;                       // WPF 視窗功能
 using System.Windows.Controls;              // WPF 控制項
 using System.Windows.Input;                 // 滑鼠鍵盤事件
 using System.Windows.Forms.Integration;     // 讓 WPF 可以使用 WinForms
 using System.Windows.Forms;                 // Windows Forms（用來取得 HWND）
+using System.Threading;                     // 執行緒功能
 
 namespace SentryX
 {
@@ -31,18 +34,45 @@ namespace SentryX
         private string? _selectedDeviceId = null;
 
         /// <summary>
-        /// 視頻播放器 - 用來播放攝影機的影像
+        /// 視頻播放器列表 - 支援多分割畫面
         /// </summary>
-        private SimpleVideoPlayer? _videoPlayer = null;
+        private List<MultiViewPlayer> _videoPlayers = new List<MultiViewPlayer>();
 
         /// <summary>
-        /// Windows Forms Panel - 真正顯示影像的區域
-        /// 因為大華SDK需要Windows原生視窗句柄(HWND)，所以要用這個
+        /// 當前分割畫面數量
         /// </summary>
-        private System.Windows.Forms.Panel? _videoPanel = null;
+        private int _currentSplitCount = 1;
 
-        // === 記住當前選擇的解碼模式 ===
-        private DecodeMode _currentDecodeMode = DecodeMode.Auto;
+        /// <summary>
+        /// 記住當前選擇的解碼模式 - 預設改為軟體解碼
+        /// </summary>
+        private DecodeMode _currentDecodeMode = DecodeMode.Software;
+
+        /// <summary>
+        /// 當前選擇的碼流類型 - 預設為主碼流
+        /// </summary>
+        private VideoStreamType _currentStreamType = VideoStreamType.Main;
+
+        /// <summary>
+        /// 視頻資訊更新計時器
+        /// </summary>
+        private System.Windows.Threading.DispatcherTimer? _videoInfoTimer;
+
+        /// <summary>
+        /// 性能監控計時器
+        /// </summary>
+        private System.Windows.Threading.DispatcherTimer? _performanceTimer;
+
+        /// <summary>
+        /// 性能計數器
+        /// </summary>
+        private PerformanceCounter? _cpuCounter;
+        private PerformanceCounter? _memoryCounter;
+
+        /// <summary>
+        /// 當前選中的分割區域播放器
+        /// </summary>
+        private MultiViewPlayer? _selectedPlayer = null;
 
         // === 建構子 - 程式啟動時第一個執行的方法 ===
 
@@ -62,6 +92,12 @@ namespace SentryX
 
             // 第4步：訂閱事件（當某些事情發生時，我們要收到通知）
             SubscribeEvents();
+
+            // 第5步：設定視頻資訊更新計時器
+            SetupVideoInfoTimer();
+
+            // 第6步：設定性能監控
+            SetupPerformanceMonitoring();
         }
 
         // === Geohot 風格：把初始化邏輯分解成小方法 ===
@@ -77,6 +113,9 @@ namespace SentryX
             // 顯示啟動訊息給用戶
             ShowMessage("✅ 系統啟動完成，SDK 已就緒");
             ShowMessage("💡 點擊「設備管理」開始添加攝影機");
+            ShowMessage("🔧 預設解碼模式已設為 CPU 軟體解碼（相容性最佳）");
+            ShowMessage("📡 預設碼流類型已設為主碼流（高畫質）");
+            ShowMessage("🖱️ 點擊分割區域選中，雙擊設備通道加入選中區域");
 
             // 更新設備列表和系統狀態顯示
             RefreshDeviceList();
@@ -84,29 +123,59 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 設定視頻顯示區域
-        /// 這是關鍵部分：建立一個 Windows Forms Panel 來顯示視頻
+        /// 設定視頻顯示區域 - 支援多分割畫面
         /// </summary>
         private void SetupVideoArea()
         {
             try
             {
-                // 建立一個黑色的 Panel 作為視頻顯示容器
-                _videoPanel = new System.Windows.Forms.Panel
-                {
-                    BackColor = System.Drawing.Color.Black,    // 背景設為黑色
-                    Dock = DockStyle.Fill                      // 填滿整個容器
-                };
-
-                // 將 Panel 放到 XAML 中的 VideoHost 裡面
-                // VideoHost 是 WindowsFormsHost，它可以承載 Windows Forms 控制項
-                VideoHost.Child = _videoPanel;
-
-                ShowMessage("📺 視頻顯示區域準備完成");
+                // 初始化為1分割畫面
+                CreateSplitScreenLayout(1);
+                ShowMessage("📺 視頻顯示區域準備完成（1分割模式）");
             }
             catch (Exception ex)
             {
                 ShowMessage($"❌ 視頻區域初始化失敗: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 設定視頻資訊更新計時器
+        /// </summary>
+        private void SetupVideoInfoTimer()
+        {
+            _videoInfoTimer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(1) // 每秒更新一次
+            };
+            _videoInfoTimer.Tick += UpdateVideoInfo;
+            _videoInfoTimer.Start();
+        }
+
+        /// <summary>
+        /// 設定性能監控
+        /// </summary>
+        private void SetupPerformanceMonitoring()
+        {
+            try
+            {
+                // 初始化性能計數器
+                _cpuCounter = new PerformanceCounter("Processor", "% Processor Time", "_Total");
+                _memoryCounter = new PerformanceCounter("Memory", "Available MBytes");
+
+                // 設定性能監控計時器
+                _performanceTimer = new System.Windows.Threading.DispatcherTimer
+                {
+                    Interval = TimeSpan.FromSeconds(2) // 每2秒更新一次
+                };
+                _performanceTimer.Tick += UpdatePerformanceInfo;
+                _performanceTimer.Start();
+
+                ShowMessage("🎯 性能監控已啟動");
+            }
+            catch (Exception ex)
+            {
+                ShowMessage($"❌ 性能監控初始化失敗: {ex.Message}");
             }
         }
 
@@ -120,6 +189,225 @@ namespace SentryX
 
             // 當 SDK 有訊息要告訴我們時，執行 OnSDKMessage 方法
             DahuaSDK.StatusMessage += OnSDKMessage;
+        }
+
+        // === 新增：多分割畫面相關方法 ===
+
+        /// <summary>
+        /// 分割畫面選擇改變事件
+        /// </summary>
+        private void SplitScreenComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            try
+            {
+                if (SplitScreenComboBox?.SelectedItem is ComboBoxItem selectedItem)
+                {
+                    if (int.TryParse(selectedItem.Tag?.ToString(), out int splitCount))
+                    {
+                        _currentSplitCount = splitCount;
+                        CreateSplitScreenLayout(splitCount);
+                        ShowMessage($"🔄 已切換到 {splitCount} 分割畫面模式");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                ShowMessage($"❌ 切換分割畫面時發生錯誤: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 碼流類型選擇改變事件
+        /// </summary>
+        private void StreamTypeComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            try
+            {
+                if (StreamTypeComboBox?.SelectedItem is ComboBoxItem selectedItem)
+                {
+                    string tag = selectedItem.Tag?.ToString() ?? "Main";
+
+                    switch (tag)
+                    {
+                        case "Main":
+                            _currentStreamType = VideoStreamType.Main;
+                            ShowMessage("已切換到主碼流模式 (高解析度，高碼率)");
+                            break;
+
+                        case "Sub":
+                            _currentStreamType = VideoStreamType.Sub;
+                            ShowMessage("已切換到輔碼流模式 (低解析度，低碼率，適合多路預覽)");
+                            break;
+                    }
+
+                    // 如果有播放器在運行，提示用戶
+                    bool hasPlayingVideo = _videoPlayers.Any(p => p.IsPlaying);
+                    if (hasPlayingVideo)
+                    {
+                        ShowMessage("提示：碼流類型變更將在下次播放時生效");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"StreamTypeComboBox_SelectionChanged 發生錯誤: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 解碼模式選擇改變事件 - 預設為軟體解碼
+        /// </summary>
+        private void DecodeTypeComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            try
+            {
+                if (DecodeTypeComboBox?.SelectedItem is ComboBoxItem selectedItem)
+                {
+                    string tag = selectedItem.Tag?.ToString() ?? "Software";
+
+                    switch (tag)
+                    {
+                        case "Software":
+                            _currentDecodeMode = DecodeMode.Software;
+                            ShowMessage("已切換到軟體解碼模式 (使用CPU，相容性最佳)");
+                            break;
+
+                        case "Hardware":
+                            _currentDecodeMode = DecodeMode.Hardware;
+                            ShowMessage("已切換到硬體解碼模式 (使用GPU，性能最佳)");
+                            break;
+
+                        case "Auto":
+                            _currentDecodeMode = DecodeMode.Auto;
+                            ShowMessage("已切換到自動選擇模式 (先試硬體，再試軟體)");
+                            break;
+                    }
+
+                    // 如果有播放器在運行，提示用戶
+                    bool hasPlayingVideo = _videoPlayers.Any(p => p.IsPlaying);
+                    if (hasPlayingVideo)
+                    {
+                        ShowMessage("提示：解碼模式變更將在下次播放時生效");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"DecodeTypeComboBox_SelectionChanged 發生錯誤: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 建立分割畫面佈局 - 增加選擇功能
+        /// </summary>  
+        private void CreateSplitScreenLayout(int splitCount)
+        {
+            try
+            {
+                // 停止並清理所有現有播放器
+                StopAllVideoPlayers();
+
+                // 清除現有佈局
+                VideoDisplayGrid.Children.Clear();
+                VideoDisplayGrid.RowDefinitions.Clear();
+                VideoDisplayGrid.ColumnDefinitions.Clear();
+
+                // 計算網格佈局
+                int gridSize = (int)Math.Ceiling(Math.Sqrt(splitCount));
+                
+                // 建立行和列定義
+                for (int i = 0; i < gridSize; i++)
+                {
+                    VideoDisplayGrid.RowDefinitions.Add(new RowDefinition());
+                    VideoDisplayGrid.ColumnDefinitions.Add(new ColumnDefinition());
+                }
+
+                // 建立視頻播放器
+                _videoPlayers.Clear();
+                _selectedPlayer = null; // 重置選中的播放器
+                int panelIndex = 0;
+
+                for (int row = 0; row < gridSize && panelIndex < splitCount; row++)
+                {
+                    for (int col = 0; col < gridSize && panelIndex < splitCount; col++)
+                    {
+                        var player = new MultiViewPlayer(panelIndex);
+                        
+                        // 訂閱選中事件
+                        player.Selected += OnPlayerSelected;
+                        
+                        _videoPlayers.Add(player);
+
+                        // 設定網格位置
+                        Grid.SetRow(player.HostControl, row);
+                        Grid.SetColumn(player.HostControl, col);
+
+                        // 加入到顯示網格
+                        VideoDisplayGrid.Children.Add(player.HostControl);
+
+                        panelIndex++;
+                    }
+                }
+
+                // 預設選中第一個分割區域
+                if (_videoPlayers.Count > 0)
+                {
+                    SelectPlayer(_videoPlayers[0]);
+                }
+
+                ShowMessage($"📐 建立了 {splitCount} 個視頻顯示區域");
+            }
+            catch (Exception ex)
+            {
+                ShowMessage($"❌ 建立分割畫面佈局失敗: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 播放器被選中事件處理
+        /// </summary>
+        private void OnPlayerSelected(MultiViewPlayer selectedPlayer)
+        {
+            try
+            {
+                SelectPlayer(selectedPlayer);
+                ShowMessage($"🎯 已選中分割區域 {selectedPlayer.Index + 1}");
+            }
+            catch (Exception ex)
+            {
+                ShowMessage($"❌ 選擇分割區域時發生錯誤: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 選中指定的播放器
+        /// </summary>
+        private void SelectPlayer(MultiViewPlayer player)
+        {
+            // 取消之前選中的播放器
+            if (_selectedPlayer != null)
+            {
+                _selectedPlayer.IsSelected = false;
+            }
+
+            // 設定新選中的播放器
+            _selectedPlayer = player;
+            _selectedPlayer.IsSelected = true;
+        }
+
+        /// <summary>
+        /// 停止所有視頻播放器
+        /// </summary>
+        private void StopAllVideoPlayers()
+        {
+            foreach (var player in _videoPlayers)
+            {
+                // 移除事件訂閱
+                player.Selected -= OnPlayerSelected;
+                player.Dispose();
+            }
+            _videoPlayers.Clear();
+            _selectedPlayer = null;
         }
 
         // === 按鈕點擊事件 - 當用戶點擊按鈕時執行的方法 ===
@@ -180,55 +468,19 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 解碼模式選擇改變事件
-        /// </summary>
-        private void DecodeTypeComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
-        {
-            try
-            {
-                if (DecodeTypeComboBox?.SelectedItem is ComboBoxItem selectedItem)
-                {
-                    string tag = selectedItem.Tag?.ToString() ?? "Auto";
-
-                    switch (tag)
-                    {
-                        case "Software":
-                            _currentDecodeMode = DecodeMode.Software;
-                            ShowMessage("已切換到軟體解碼模式 (使用CPU，相容性最佳)");
-                            break;
-
-                        case "Hardware":
-                            _currentDecodeMode = DecodeMode.Hardware;
-                            ShowMessage("已切換到硬體解碼模式 (使用GPU，性能最佳)");
-                            break;
-
-                        case "Auto":
-                        default:
-                            _currentDecodeMode = DecodeMode.Auto;
-                            ShowMessage("已切換到自動選擇模式 (先試硬體，再試軟體)");
-                            break;
-                    }
-
-                    if (_videoPlayer != null && _videoPlayer.IsPlaying)
-                    {
-                        ShowMessage("提示：解碼模式變更將在下次播放時生效");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"DecodeTypeComboBox_SelectionChanged 發生錯誤: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// 開始播放方法 - 使用用戶選擇的解碼模式並清除舊畫面
+        /// 開始播放方法 - 修改為支援選中區域播放
         /// </summary>
         private void StartVideoButton_Click(object sender, RoutedEventArgs e)
         {
             if (string.IsNullOrEmpty(_selectedDeviceId))
             {
                 ShowMessage("請先在左側選擇一個攝影機設備或通道");
+                return;
+            }
+
+            if (_selectedPlayer == null)
+            {
+                ShowMessage("請先點擊選中一個分割區域");
                 return;
             }
 
@@ -241,140 +493,174 @@ namespace SentryX
 
             try
             {
-                // 第1步：停止並清理舊的播放器（解決畫面殘留問題）
-                if (_videoPlayer != null)
-                {
-                    _videoPlayer.StopPlay();
-                    _videoPlayer.Dispose();
-                    _videoPlayer = null;
+                // 使用選中的播放器
+                var targetPlayer = _selectedPlayer;
 
-                    // 清除視頻顯示區域的內容
-                    ClearVideoDisplay();
-                    ShowMessage("已清除舊的視頻畫面");
-                }
-
-                // 第2步：從選中的項目中提取通道號
+                // 從選中的項目中提取通道號
                 int channel = ExtractChannelFromSelection();
 
                 string decodeModeText = GetDecodeModeText();
-                ShowMessage($"準備使用{decodeModeText}播放 {device.Name} 通道{channel + 1} 的視頻...");
+                string streamTypeText = _currentStreamType == VideoStreamType.Main ? "主碼流" : "輔碼流";
+                ShowMessage($"準備使用{decodeModeText}在分割區域 {targetPlayer.Index + 1} 播放 {device.Name} 通道{channel + 1} 的{streamTypeText}視頻...");
 
-                // 第3步：使用用戶選擇的解碼模式建立新播放器
-                _videoPlayer = new SimpleVideoPlayer(_currentDecodeMode);
-
-                // 第4步：取得視頻顯示窗口句柄
-                IntPtr windowHandle = GetVideoWindowHandle();
-
-                if (windowHandle == IntPtr.Zero)
+                // 開始播放
+                if (targetPlayer.StartPlay(device.LoginHandle, channel, _currentDecodeMode, _currentStreamType, device.Name))
                 {
-                    ShowMessage("無法取得視頻顯示區域的窗口句柄");
-                    CleanupVideoPlayer();
-                    return;
-                }
-
-                // 第5步：開始播放
-                if (_videoPlayer.StartPlay(device.LoginHandle, channel, windowHandle))
-                {
-                    StartVideoButton.IsEnabled = false;
+                    StartVideoButton.IsEnabled = true;
                     StopVideoButton.IsEnabled = true;
-                    ShowMessage($"開始播放 {device.Name} 通道{channel + 1} 的即時視頻 ({decodeModeText})");
+                    ShowMessage($"開始播放 {device.Name} 通道{channel + 1} 的即時視頻 ({decodeModeText}, {streamTypeText}) - 分割區域 {targetPlayer.Index + 1}");
+                    
+                    // 自動選中下一個可用的分割區域
+                    SelectNextAvailablePlayer();
                 }
                 else
                 {
                     ShowMessage("視頻播放啟動失敗，請檢查設備連接或嘗試其他解碼模式");
-                    CleanupVideoPlayer();
                 }
             }
             catch (Exception ex)
             {
                 ShowMessage($"視頻播放發生錯誤：{ex.Message}");
-                CleanupVideoPlayer();
             }
         }
 
         /// <summary>
-        /// 修改停止播放方法 - 停止播放視頻
+        /// 自動選中下一個可用的分割區域
         /// </summary>
-        private void StopVideoButton_Click(object sender, RoutedEventArgs e)
-        {
-            if (_videoPlayer != null)
-            {
-                // 停止播放
-                _videoPlayer.StopPlay();
-                _videoPlayer.Dispose();
-                _videoPlayer = null;
-
-                // 清除視頻顯示區域
-                ClearVideoDisplay();
-
-                // 更新按鈕狀態
-                StartVideoButton.IsEnabled = true;
-                StopVideoButton.IsEnabled = false;
-
-                ShowMessage("視頻播放已停止，畫面已清除");
-            }
-        }
-
-        // === 新增的輔助方法 ===
-
-        /// <summary>
-        /// 清除視頻顯示區域 - 解決畫面殘留問題
-        /// </summary>
-        private void ClearVideoDisplay()
+        private void SelectNextAvailablePlayer()
         {
             try
             {
-                if (_videoPanel != null)
+                var nextPlayer = _videoPlayers.FirstOrDefault(p => !p.IsPlaying);
+                if (nextPlayer != null)
                 {
-                    // 方法1：重新建立 Panel（最有效的清除方式）
-                    _videoPanel.Dispose();
-
-                    // 建立新的黑色 Panel
-                    _videoPanel = new System.Windows.Forms.Panel
-                    {
-                        BackColor = System.Drawing.Color.Black,
-                        Dock = DockStyle.Fill
-                    };
-
-                    // 重新設定到 VideoHost
-                    VideoHost.Child = _videoPanel;
-
-                    ShowMessage("視頻顯示區域已重設");
+                    SelectPlayer(nextPlayer);
+                    ShowMessage($"🎯 自動選中下一個可用區域：分割區域 {nextPlayer.Index + 1}");
                 }
             }
             catch (Exception ex)
             {
-                ShowMessage($"清除視頻顯示時發生錯誤：{ex.Message}");
+                ShowMessage($"❌ 自動選擇下一個區域時發生錯誤: {ex.Message}");
             }
         }
 
         /// <summary>
-        /// 取得解碼模式的文字描述
+        /// 停止播放方法 - 修改為支援多分割畫面
         /// </summary>
-        private string GetDecodeModeText()
+        private void StopVideoButton_Click(object sender, RoutedEventArgs e)
         {
-            return _currentDecodeMode switch
+            try
             {
-                DecodeMode.Software => "軟體解碼",
-                DecodeMode.Hardware => "硬體解碼",
-                DecodeMode.Auto => "自動解碼",
-                _ => "未知模式"
-            };
+                int stoppedCount = 0;
+                foreach (var player in _videoPlayers)
+                {
+                    if (player.IsPlaying)
+                    {
+                        player.StopPlay();
+                        stoppedCount++;
+                    }
+                }
+
+                if (stoppedCount > 0)
+                {
+                    StartVideoButton.IsEnabled = true;
+                    StopVideoButton.IsEnabled = false;
+                    ShowMessage($"已停止 {stoppedCount} 個視頻播放");
+                }
+                else
+                {
+                    ShowMessage("沒有正在播放的視頻");
+                }
+            }
+            catch (Exception ex)
+            {
+                ShowMessage($"停止播放時發生錯誤：{ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 停止所有播放按鈕事件
+        /// </summary>
+        private void StopAllVideoButton_Click(object sender, RoutedEventArgs e)
+        {
+            StopVideoButton_Click(sender, e);
+        }
+
+        // === 新增：視頻資訊更新方法 ===
+
+        /// <summary>
+        /// 更新視頻資訊顯示 - 修正 null 警告
+        /// </summary>
+        private void UpdateVideoInfo(object? sender, EventArgs e)
+        {
+            try
+            {
+                var playingPlayers = _videoPlayers.Where(p => p.IsPlaying).ToList();
+                
+                if (playingPlayers.Count > 0)
+                {
+                    // 顯示第一個播放中的視頻資訊
+                    var firstPlayer = playingPlayers.First();
+                    if (firstPlayer.VideoInfo != null)
+                    {
+                        var info = firstPlayer.VideoInfo;
+                        ResolutionTextBlock.Text = $"{info.Width}x{info.Height}";
+                        FpsTextBlock.Text = $"{info.Fps:F1}";
+                        BitrateTextBlock.Text = $"{info.Bitrate:F1} kbps";
+                    }
+
+                    // 更新性能統計
+                    PlayingCountTextBlock.Text = playingPlayers.Count.ToString();
+                    double totalBitrate = playingPlayers.Where(p => p.VideoInfo != null)
+                                                      .Sum(p => p.VideoInfo!.Bitrate);
+                    TotalBitrateTextBlock.Text = $"{totalBitrate:F1} kbps";
+                }
+                else
+                {
+                    ResolutionTextBlock.Text = "--";
+                    FpsTextBlock.Text = "--";
+                    BitrateTextBlock.Text = "--";
+                    PlayingCountTextBlock.Text = "0";
+                    TotalBitrateTextBlock.Text = "0 kbps";
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"UpdateVideoInfo 發生錯誤: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 更新性能資訊顯示 - 修正 null 警告
+        /// </summary>
+        private void UpdatePerformanceInfo(object? sender, EventArgs e)
+        {
+            try
+            {
+                if (_cpuCounter != null && _memoryCounter != null)
+                {
+                    // 取得 CPU 和可用記憶體的最新數據
+                    float cpuUsage = _cpuCounter.NextValue();
+                    float availableMemory = _memoryCounter.NextValue();
+
+                    // 更新介面上的顯示
+                    CpuUsageTextBlock.Text = $"{cpuUsage:F1}%";
+                    MemoryUsageTextBlock.Text = $"{availableMemory:F1} MB";
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"UpdatePerformanceInfo 發生錯誤: {ex.Message}");
+            }
         }
 
         // === 列表選擇事件 - 當用戶在設備列表中選擇項目時 ===
 
         /// <summary>
-        /// 修改設備選擇邏輯 - 選擇新設備時停止舊播放
+        /// 修改設備選擇邏輯 - 適配多分割畫面
         /// </summary>
         private void DeviceListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            // 如果正在播放，先停止（避免畫面混亂）
-            if (_videoPlayer != null && _videoPlayer.IsPlaying)
-            {
-                StopVideoButton_Click(sender, new RoutedEventArgs());
-            }
-
             // 現有的選擇邏輯保持不變
             if (DeviceListBox.SelectedItem is string selectedText)
             {
@@ -409,7 +695,7 @@ namespace SentryX
                 {
                     _selectedDeviceId = selectedDevice.Id;
                     ShowMessage($"已選中: {selectedDevice.Name} 通道{selectedChannel + 1}");
-                    StartVideoButton.IsEnabled = selectedDevice.IsOnline && !StopVideoButton.IsEnabled;
+                    StartVideoButton.IsEnabled = selectedDevice.IsOnline && (_selectedPlayer != null);
                 }
                 else
                 {
@@ -425,14 +711,18 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 設備列表雙擊事件 - 用戶雙擊設備時直接開始播放
+        /// 設備列表雙擊事件 - 用戶雙擊設備時直接開始播放到選中區域
         /// </summary>
         private void DeviceListBox_MouseDoubleClick(object sender, MouseButtonEventArgs e)
         {
             // 如果開始播放按鈕可用，就模擬點擊它
-            if (StartVideoButton.IsEnabled)
+            if (StartVideoButton.IsEnabled && _selectedPlayer != null)
             {
                 StartVideoButton_Click(sender, new RoutedEventArgs());
+            }
+            else if (_selectedPlayer == null)
+            {
+                ShowMessage("請先點擊選中一個分割區域");
             }
         }
 
@@ -464,61 +754,31 @@ namespace SentryX
         /// SDK 訊息回調 - 當 SDK 有重要訊息時執行
         /// </summary>
         private void OnSDKMessage(string message)
-    {
-        try
         {
-            Dispatcher.Invoke(() => ShowMessage($"SDK: {message}"));
+            try
+            {
+                Dispatcher.Invoke(() => ShowMessage($"SDK: {message}"));
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"OnSDKMessage 發生錯誤: {ex.Message}");
+            }
         }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"OnSDKMessage 發生錯誤: {ex.Message}");
-        }
-    }
 
         // === Geohot 風格的輔助方法 - 小而專一的功能 ===
 
         /// <summary>
-        /// 取得視頻窗口句柄 - 這是播放視頻的關鍵
-        /// 大華 SDK 需要一個真正的 Windows 窗口句柄 (HWND) 來顯示視頻
+        /// 取得解碼模式的文字描述
         /// </summary>
-        private IntPtr GetVideoWindowHandle()
+        private string GetDecodeModeText()
         {
-            try
+            return _currentDecodeMode switch
             {
-                if (_videoPanel == null)
-                {
-                    ShowMessage("錯誤：視頻面板未初始化");
-                    return IntPtr.Zero;
-                }
-
-                // 確保 Panel 的窗口句柄已經被建立
-                // 在 Windows 中，控制項只有在真正需要顯示時才會建立句柄
-                if (!_videoPanel.IsHandleCreated)
-                {
-                    // 強制建立句柄
-                    var handle = _videoPanel.Handle;
-                }
-
-                ShowMessage($"📺 取得視頻窗口句柄: {_videoPanel.Handle}");
-                return _videoPanel.Handle;
-            }
-            catch (Exception ex)
-            {
-                ShowMessage($"取得窗口句柄時發生異常: {ex.Message}");
-                return IntPtr.Zero;
-            }
-        }
-
-        /// <summary>
-        /// 清理視頻播放器 - 當出錯時清理資源
-        /// </summary>
-        private void CleanupVideoPlayer()
-        {
-            if (_videoPlayer != null)
-            {
-                _videoPlayer.Dispose();
-                _videoPlayer = null;
-            }
+                DecodeMode.Software => "軟體解碼",
+                DecodeMode.Hardware => "硬體解碼",
+                DecodeMode.Auto => "自動解碼",
+                _ => "未知模式"
+            };
         }
 
         /// <summary>
@@ -694,8 +954,9 @@ namespace SentryX
         {
             try
             {
-                _videoPlayer?.StopPlay();
-                _videoPlayer?.Dispose();
+                _videoInfoTimer?.Stop();
+                _performanceTimer?.Stop();
+                StopAllVideoPlayers();
                 SimpleVideoPlayer.GlobalCleanup();
                 _deviceManager?.Close();
 

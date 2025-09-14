@@ -2,46 +2,71 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="SentryX" 
-        Height="600" Width="1000"
-        MinHeight="400" MinWidth="600"
+        Height="700" Width="1280"
+        MinHeight="600" MinWidth="720"
         WindowStartupLocation="CenterScreen">
 
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
-            <RowDefinition Height="100"/>
+            <RowDefinition Height="200" MinHeight="180"/>
         </Grid.RowDefinitions>
 
-        <!-- 工具列 - 修正後的版本 -->
-        <StackPanel Grid.Row="0" Orientation="Horizontal" Background="LightGray">
+        <!-- 工具列保持不變 -->
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Background="LightGray" Margin="2">
             <Button Name="DeviceManagerButton" Content="🔧 設備管理" Click="DeviceManagerButton_Click" 
-                    ToolTip="開啟設備管理視窗"/>
+                    ToolTip="開啟設備管理視窗" Margin="2"/>
             <Button Name="RefreshButton" Content="🔄 刷新" Click="RefreshButton_Click" 
-                    ToolTip="刷新設備列表"/>
+                    ToolTip="刷新設備列表" Margin="2"/>
 
-            <!-- 解碼模式選擇 - 現在在正確的位置 -->
-            <Separator Width="20"/>
-            <TextBlock Text="解碼模式:" VerticalAlignment="Center" FontWeight="Bold"/>
+            <!-- 多分割畫面選單 -->
+            <Separator Width="10"/>
+            <TextBlock Text="分割畫面:" VerticalAlignment="Center" FontWeight="Bold"/>
+            <ComboBox x:Name="SplitScreenComboBox" Width="100" Margin="5,2"
+                      SelectionChanged="SplitScreenComboBox_SelectionChanged"
+                      ToolTip="選擇分割畫面數量">
+                <ComboBoxItem Content="1 分割" Tag="1" IsSelected="True"/>
+                <ComboBoxItem Content="4 分割" Tag="4"/>
+                <ComboBoxItem Content="9 分割" Tag="9"/>
+                <ComboBoxItem Content="16 分割" Tag="16"/>
+                <ComboBoxItem Content="25 分割" Tag="25"/>
+                <ComboBoxItem Content="36 分割" Tag="36"/>
+                <ComboBoxItem Content="64 分割" Tag="64"/>
+            </ComboBox>
 
-            <Separator Width="20"/>
+            <!-- 碼流選擇 -->
+            <Separator Width="10"/>
+            <TextBlock Text="碼流:" VerticalAlignment="Center" FontWeight="Bold"/>
+            <ComboBox x:Name="StreamTypeComboBox" Width="100" Margin="5,2"
+                      SelectionChanged="StreamTypeComboBox_SelectionChanged"
+                      ToolTip="選擇視頻碼流類型">
+                <ComboBoxItem Content="主碼流" Tag="Main" IsSelected="True"/>
+                <ComboBoxItem Content="輔碼流" Tag="Sub"/>
+            </ComboBox>
+
+            <!-- 解碼模式選擇 -->
+            <Separator Width="10"/>
+            <TextBlock Text="解碼:" VerticalAlignment="Center" FontWeight="Bold"/>
+            <ComboBox x:Name="DecodeTypeComboBox" Width="80" Margin="5,2"
+                      SelectionChanged="DecodeTypeComboBox_SelectionChanged"
+                      ToolTip="選擇視頻解碼方式">
+                <ComboBoxItem Content="軟體解碼" Tag="Software" IsSelected="True"/>
+                <ComboBoxItem Content="硬體解碼" Tag="Hardware"/>
+                <ComboBoxItem Content="自動選擇" Tag="Auto"/>
+            </ComboBox>
+
+            <Separator Width="10"/>
             <TextBlock Text="系統狀態:" VerticalAlignment="Center" FontWeight="Bold"/>
             <TextBlock Name="SystemStatusTextBlock" VerticalAlignment="Center" Margin="10,0" 
                        Text="就緒" Foreground="Green"/>
-            <Separator Width="20"/>
+            <Separator Width="10"/>
             <TextBlock Text="設備統計:" VerticalAlignment="Center" FontWeight="Bold"/>
             <TextBlock Name="DeviceStatsTextBlock" VerticalAlignment="Center" Margin="10,0" 
                        Text="總計: 0, 在線: 0"/>
-            <ComboBox x:Name="DecodeTypeComboBox" Width="103" 
-                      SelectionChanged="DecodeTypeComboBox_SelectionChanged"
-                      ToolTip="選擇視頻解碼方式" Height="25">
-                <ComboBoxItem Content="自動選擇" Tag="Auto" IsSelected="True"/>
-                <ComboBoxItem Content="軟體解碼" Tag="Software"/>
-                <ComboBoxItem Content="硬體解碼" Tag="Hardware"/>
-            </ComboBox>
         </StackPanel>
 
-        <!-- 主要內容區：左右分割 -->
+        <!-- 主要內容區保持不變 -->
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="300"/>
@@ -71,11 +96,11 @@
 
             <!-- 右側：視頻顯示區 -->
             <DockPanel Grid.Column="2">
-                <!-- 視頻控制按鈕 - 在右上方 -->
+                <!-- 視頻控制按鈕和資訊顯示 -->
                 <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="5">
                     <TextBlock Text="視頻顯示區" FontWeight="Bold" VerticalAlignment="Center"/>
 
-                    <!-- 把播放控制按鈕放在右邊 -->
+                    <!-- 播放控制按鈕 -->
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" 
                                Margin="20,0,0,0">
                         <Button Name="StartVideoButton" Content="▶️ 播放" Margin="5,0" 
@@ -84,25 +109,102 @@
                         <Button Name="StopVideoButton" Content="⏹️ 停止" Margin="5,0" 
                                 Click="StopVideoButton_Click" IsEnabled="False"
                                 ToolTip="停止視頻播放"/>
+                        <Button Name="StopAllVideoButton" Content="⏹️ 全停" Margin="5,0" 
+                                Click="StopAllVideoButton_Click" IsEnabled="False"
+                                ToolTip="停止所有視頻播放"/>
                     </StackPanel>
                 </StackPanel>
 
-                <!-- 使用 WindowsFormsHost 來承載視頻 -->
-                <WindowsFormsHost Name="VideoHost" Background="Black">
-                    <!-- 這裡會在 C# 代碼中動態添加 Panel -->
-                </WindowsFormsHost>
+                <!-- 視頻顯示區域 -->
+                <Grid Name="VideoDisplayGrid" Background="Black">
+                    <!-- 動態生成的分割畫面將在這裡 -->
+                </Grid>
             </DockPanel>
         </Grid>
 
-        <!-- 下方狀態區 -->
-        <DockPanel Grid.Row="2" Background="LightBlue">
-            <TextBlock DockPanel.Dock="Top" Text="系統狀態" FontWeight="Bold" Margin="5"/>
-            <ScrollViewer Name="StatusScrollViewer">
-                <TextBlock Name="StatusTextBlock" 
-                          Text="系統啟動完成，點擊「設備管理」開始添加設備..." 
-                          TextWrapping="Wrap" 
-                          Margin="5"/>
-            </ScrollViewer>
-        </DockPanel>
+        <!-- 下方狀態區 - 增加更多高度 -->
+        <Grid Grid.Row="2" Background="LightBlue" MinHeight="180">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*" MinHeight="80"/>
+            </Grid.RowDefinitions>
+
+            <!-- 視頻資訊顯示區 -->
+            <GroupBox Grid.Row="0" Header="當前播放視頻資訊" Margin="3,2">
+                <Grid Margin="5">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" Margin="5">
+                        <TextBlock Text="解析度: " FontWeight="Bold"/>
+                        <TextBlock Name="ResolutionTextBlock" Text="--" Foreground="Blue"/>
+                    </StackPanel>
+                    
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="5">
+                        <TextBlock Text="FPS: " FontWeight="Bold"/>
+                        <TextBlock Name="FpsTextBlock" Text="--" Foreground="Green"/>
+                    </StackPanel>
+                    
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="5">
+                        <TextBlock Text="碼率: " FontWeight="Bold"/>
+                        <TextBlock Name="BitrateTextBlock" Text="--" Foreground="Red"/>
+                    </StackPanel>
+                </Grid>
+            </GroupBox>
+
+            <!-- 性能監控顯示區 -->
+            <GroupBox Grid.Row="1" Header="性能監控" Margin="3,2">
+                <Grid Margin="5">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" Margin="5">
+                        <TextBlock Text="播放中: " FontWeight="Bold"/>
+                        <TextBlock Name="PlayingCountTextBlock" Text="0" Foreground="Orange"/>
+                    </StackPanel>
+                    
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="5">
+                        <TextBlock Text="總流量: " FontWeight="Bold"/>
+                        <TextBlock Name="TotalBitrateTextBlock" Text="0 kbps" Foreground="Purple"/>
+                    </StackPanel>
+                    
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="5">
+                        <TextBlock Text="CPU使用: " FontWeight="Bold"/>
+                        <TextBlock Name="CpuUsageTextBlock" Text="0%" Foreground="DarkRed"/>
+                    </StackPanel>
+                    
+                    <StackPanel Grid.Column="3" Orientation="Horizontal" Margin="5">
+                        <TextBlock Text="記憶體: " FontWeight="Bold"/>
+                        <TextBlock Name="MemoryUsageTextBlock" Text="0 MB" Foreground="DarkBlue"/>
+                    </StackPanel>
+                </Grid>
+            </GroupBox>
+
+            <!-- 系統狀態訊息 - 大幅增加高度 -->
+            <GroupBox Grid.Row="2" Header="系統狀態" Margin="3,2">
+                <ScrollViewer Name="StatusScrollViewer" 
+                             VerticalScrollBarVisibility="Auto" 
+                             HorizontalScrollBarVisibility="Disabled"
+                             MinHeight="60">
+                    <TextBox Name="StatusTextBlock" 
+                            Text="系統啟動完成，點擊「設備管理」開始添加設備..." 
+                            TextWrapping="Wrap" 
+                            Margin="5"
+                            FontSize="11"
+                            IsReadOnly="True"
+                            BorderThickness="0"
+                            Background="Transparent"
+                            VerticalScrollBarVisibility="Auto"/>
+                </ScrollViewer>
+            </GroupBox>
+        </Grid>
     </Grid>
 </Window>

@@ -74,6 +74,11 @@ namespace SentryX
         /// </summary>
         private MultiViewPlayer? _selectedPlayer = null;
 
+        /// <summary>
+        /// UI 是否已完全初始化
+        /// </summary>
+        private bool _isUIInitialized = false;
+
         // === 建構子 - 程式啟動時第一個執行的方法 ===
 
         /// <summary>
@@ -81,23 +86,74 @@ namespace SentryX
         /// </summary>
         public MainWindow()
         {
-            // 第1步：初始化XAML中定義的所有控制項（按鈕、文字框等）
-            InitializeComponent();
+            try
+            {
+                // 第1步：初始化XAML中定義的所有控制項（按鈕、文字框等）
+                InitializeComponent();
 
-            // 第2步：設定介面的初始狀態
-            SetupUI();
+                // 第2步：驗證重要控制項是否已正確載入
+                if (!ValidateUIComponents())
+                {
+                    System.Windows.MessageBox.Show("UI 控制項載入失敗，程式可能無法正常運行", "初始化錯誤", 
+                                   MessageBoxButton.OK, MessageBoxImage.Error);
+                    return;
+                }
 
-            // 第3步：準備視頻顯示區域
-            SetupVideoArea();
+                // 第3步：標記 UI 已初始化
+                _isUIInitialized = true;
 
-            // 第4步：訂閱事件（當某些事情發生時，我們要收到通知）
-            SubscribeEvents();
+                // 第4步：設定介面的初始狀態
+                SetupUI();
 
-            // 第5步：設定視頻資訊更新計時器
-            SetupVideoInfoTimer();
+                // 第5步：準備視頻顯示區域
+                SetupVideoArea();
 
-            // 第6步：設定性能監控
-            SetupPerformanceMonitoring();
+                // 第6步：訂閱事件（當某些事情發生時，我們要收到通知）
+                SubscribeEvents();
+
+                // 第7步：設定視頻資訊更新計時器
+                SetupVideoInfoTimer();
+
+                // 第8步：設定性能監控
+                SetupPerformanceMonitoring();
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show($"主視窗初始化失敗：{ex.Message}", "嚴重錯誤", 
+                               MessageBoxButton.OK, MessageBoxImage.Error);
+                Console.WriteLine($"MainWindow 初始化異常：{ex}");
+            }
+        }
+
+        // === 新增：UI 控制項驗證方法 ===
+
+        /// <summary>
+        /// 驗證重要的 UI 控制項是否已正確載入
+        /// </summary>
+        /// <returns>是否所有重要控制項都已載入</returns>
+        private bool ValidateUIComponents()
+        {
+            var missingComponents = new List<string>();
+
+            // 檢查必要的控制項
+            if (VideoDisplayGrid == null) missingComponents.Add("VideoDisplayGrid");
+            if (DeviceListBox == null) missingComponents.Add("DeviceListBox");
+            if (SplitScreenComboBox == null) missingComponents.Add("SplitScreenComboBox");
+            if (StreamTypeComboBox == null) missingComponents.Add("StreamTypeComboBox");
+            if (DecodeTypeComboBox == null) missingComponents.Add("DecodeTypeComboBox");
+            if (StatusTextBlock == null) missingComponents.Add("StatusTextBlock");
+            if (StatusScrollViewer == null) missingComponents.Add("StatusScrollViewer");
+
+            if (missingComponents.Count > 0)
+            {
+                string missing = string.Join(", ", missingComponents);
+                Console.WriteLine($"以下 UI 控制項載入失敗：{missing}");
+                Console.WriteLine("請檢查 XAML 檔案中的控制項命名是否正確，並重新建置專案。");
+                return false;
+            }
+
+            Console.WriteLine("✅ 所有重要 UI 控制項已成功載入");
+            return true;
         }
 
         // === Geohot 風格：把初始化邏輯分解成小方法 ===
@@ -107,6 +163,8 @@ namespace SentryX
         /// </summary>
         private void SetupUI()
         {
+            if (!_isUIInitialized) return;
+
             // 設定視窗標題，包含當前日期
             this.Title = $"SentryX CCTV 系統 ({DateTime.Now:yyyy-MM-dd})";
 
@@ -123,12 +181,27 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 設定視頻顯示區域 - 支援多分割畫面
+        /// 設定視頻顯示區域 - 支援多分割畫面（強化安全檢查）
         /// </summary>
         private void SetupVideoArea()
         {
+            if (!_isUIInitialized)
+            {
+                Console.WriteLine("警告：UI 尚未初始化，跳過視頻區域設定");
+                return;
+            }
+
             try
             {
+                // 強化檢查 VideoDisplayGrid
+                if (VideoDisplayGrid == null)
+                {
+                    Console.WriteLine("❌ 嚴重錯誤：VideoDisplayGrid 為 null，無法設定視頻區域");
+                    ShowMessage("❌ 視頻顯示區域初始化失敗：VideoDisplayGrid 控制項未找到");
+                    ShowMessage("💡 請檢查 XAML 檔案並重新建置專案");
+                    return;
+                }
+
                 // 初始化為1分割畫面
                 CreateSplitScreenLayout(1);
                 ShowMessage("📺 視頻顯示區域準備完成（1分割模式）");
@@ -136,6 +209,7 @@ namespace SentryX
             catch (Exception ex)
             {
                 ShowMessage($"❌ 視頻區域初始化失敗: {ex.Message}");
+                Console.WriteLine($"SetupVideoArea 異常：{ex}");
             }
         }
 
@@ -144,6 +218,8 @@ namespace SentryX
         /// </summary>
         private void SetupVideoInfoTimer()
         {
+            if (!_isUIInitialized) return;
+
             _videoInfoTimer = new System.Windows.Threading.DispatcherTimer
             {
                 Interval = TimeSpan.FromSeconds(1) // 每秒更新一次
@@ -157,6 +233,8 @@ namespace SentryX
         /// </summary>
         private void SetupPerformanceMonitoring()
         {
+            if (!_isUIInitialized) return;
+
             try
             {
                 // 初始化性能計數器
@@ -184,6 +262,8 @@ namespace SentryX
         /// </summary>
         private void SubscribeEvents()
         {
+            if (!_isUIInitialized) return;
+
             // 當設備狀態改變時（上線/下線），執行 OnDeviceChanged 方法
             DahuaSDK.DeviceStatusChanged += OnDeviceChanged;
 
@@ -198,6 +278,8 @@ namespace SentryX
         /// </summary>
         private void SplitScreenComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
+            if (!_isUIInitialized) return;
+
             try
             {
                 if (SplitScreenComboBox?.SelectedItem is ComboBoxItem selectedItem)
@@ -221,6 +303,8 @@ namespace SentryX
         /// </summary>
         private void StreamTypeComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
+            if (!_isUIInitialized) return;
+
             try
             {
                 if (StreamTypeComboBox?.SelectedItem is ComboBoxItem selectedItem)
@@ -259,6 +343,8 @@ namespace SentryX
         /// </summary>
         private void DecodeTypeComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
+            if (!_isUIInitialized) return;
+
             try
             {
                 if (DecodeTypeComboBox?.SelectedItem is ComboBoxItem selectedItem)
@@ -298,12 +384,30 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 建立分割畫面佈局 - 增加選擇功能
+        /// 建立分割畫面佈局 - 最強化安全檢查版本
         /// </summary>  
         private void CreateSplitScreenLayout(int splitCount)
         {
+            if (!_isUIInitialized)
+            {
+                Console.WriteLine("警告：UI 尚未初始化，無法建立分割畫面");
+                return;
+            }
+
             try
             {
+                // 最強化檢查 VideoDisplayGrid
+                if (VideoDisplayGrid == null)
+                {
+                    Console.WriteLine("❌ 嚴重錯誤：VideoDisplayGrid 仍然為 null，無法建立分割畫面");
+                    ShowMessage("❌ 無法建立分割畫面：視頻顯示區域未初始化");
+                    ShowMessage("🔧 建議解決方案：");
+                    ShowMessage("   1. 重新建置專案 (Build → Rebuild Solution)");
+                    ShowMessage("   2. 清理專案快取 (Build → Clean Solution)");
+                    ShowMessage("   3. 重新啟動 Visual Studio");
+                    return;
+                }
+
                 // 停止並清理所有現有播放器
                 StopAllVideoPlayers();
 
@@ -355,11 +459,35 @@ namespace SentryX
                     SelectPlayer(_videoPlayers[0]);
                 }
 
-                ShowMessage($"📐 建立了 {splitCount} 個視頻顯示區域");
+                // 強制刷新UI，確保所有邊框都顯示
+                VideoDisplayGrid.UpdateLayout();
+                VideoDisplayGrid.InvalidateVisual();
+
+                ShowMessage($"📐 建立了 {splitCount} 個視頻顯示區域（已強制顯示灰色邊框）");
+
+                // 額外的邊框顯示確保
+                Dispatcher.BeginInvoke(new System.Action(() =>
+                {
+                    try
+                    {
+                        foreach (var player in _videoPlayers)
+                        {
+                            // 強制觸發邊框更新
+                            var currentSelected = player.IsSelected;
+                            player.IsSelected = !currentSelected;
+                            player.IsSelected = currentSelected;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"強制邊框更新失敗: {ex.Message}");
+                    }
+                }), System.Windows.Threading.DispatcherPriority.Background);
             }
             catch (Exception ex)
             {
                 ShowMessage($"❌ 建立分割畫面佈局失敗: {ex.Message}");
+                Console.WriteLine($"CreateSplitScreenLayout 異常：{ex}");
             }
         }
 
@@ -402,9 +530,16 @@ namespace SentryX
         {
             foreach (var player in _videoPlayers)
             {
-                // 移除事件訂閱
-                player.Selected -= OnPlayerSelected;
-                player.Dispose();
+                try
+                {
+                    // 移除事件訂閱
+                    player.Selected -= OnPlayerSelected;
+                    player.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"清理播放器時發生錯誤: {ex.Message}");
+                }
             }
             _videoPlayers.Clear();
             _selectedPlayer = null;
@@ -593,6 +728,8 @@ namespace SentryX
         /// </summary>
         private void UpdateVideoInfo(object? sender, EventArgs e)
         {
+            if (!_isUIInitialized) return;
+
             try
             {
                 var playingPlayers = _videoPlayers.Where(p => p.IsPlaying).ToList();
@@ -604,24 +741,24 @@ namespace SentryX
                     if (firstPlayer.VideoInfo != null)
                     {
                         var info = firstPlayer.VideoInfo;
-                        ResolutionTextBlock.Text = $"{info.Width}x{info.Height}";
-                        FpsTextBlock.Text = $"{info.Fps:F1}";
-                        BitrateTextBlock.Text = $"{info.Bitrate:F1} kbps";
+                        if (ResolutionTextBlock != null) ResolutionTextBlock.Text = $"{info.Width}x{info.Height}";
+                        if (FpsTextBlock != null) FpsTextBlock.Text = $"{info.Fps:F1}";
+                        if (BitrateTextBlock != null) BitrateTextBlock.Text = $"{info.Bitrate:F1} kbps";
                     }
 
                     // 更新性能統計
-                    PlayingCountTextBlock.Text = playingPlayers.Count.ToString();
+                    if (PlayingCountTextBlock != null) PlayingCountTextBlock.Text = playingPlayers.Count.ToString();
                     double totalBitrate = playingPlayers.Where(p => p.VideoInfo != null)
                                                       .Sum(p => p.VideoInfo!.Bitrate);
-                    TotalBitrateTextBlock.Text = $"{totalBitrate:F1} kbps";
+                    if (TotalBitrateTextBlock != null) TotalBitrateTextBlock.Text = $"{totalBitrate:F1} kbps";
                 }
                 else
                 {
-                    ResolutionTextBlock.Text = "--";
-                    FpsTextBlock.Text = "--";
-                    BitrateTextBlock.Text = "--";
-                    PlayingCountTextBlock.Text = "0";
-                    TotalBitrateTextBlock.Text = "0 kbps";
+                    if (ResolutionTextBlock != null) ResolutionTextBlock.Text = "--";
+                    if (FpsTextBlock != null) FpsTextBlock.Text = "--";
+                    if (BitrateTextBlock != null) BitrateTextBlock.Text = "--";
+                    if (PlayingCountTextBlock != null) PlayingCountTextBlock.Text = "0";
+                    if (TotalBitrateTextBlock != null) TotalBitrateTextBlock.Text = "0 kbps";
                 }
             }
             catch (Exception ex)
@@ -635,6 +772,8 @@ namespace SentryX
         /// </summary>
         private void UpdatePerformanceInfo(object? sender, EventArgs e)
         {
+            if (!_isUIInitialized) return;
+
             try
             {
                 if (_cpuCounter != null && _memoryCounter != null)
@@ -644,8 +783,8 @@ namespace SentryX
                     float availableMemory = _memoryCounter.NextValue();
 
                     // 更新介面上的顯示
-                    CpuUsageTextBlock.Text = $"{cpuUsage:F1}%";
-                    MemoryUsageTextBlock.Text = $"{availableMemory:F1} MB";
+                    if (CpuUsageTextBlock != null) CpuUsageTextBlock.Text = $"{cpuUsage:F1}%";
+                    if (MemoryUsageTextBlock != null) MemoryUsageTextBlock.Text = $"{availableMemory:F1} MB";
                 }
             }
             catch (Exception ex)
@@ -661,6 +800,8 @@ namespace SentryX
         /// </summary>
         private void DeviceListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
+            if (!_isUIInitialized) return;
+
             // 現有的選擇邏輯保持不變
             if (DeviceListBox.SelectedItem is string selectedText)
             {
@@ -695,18 +836,18 @@ namespace SentryX
                 {
                     _selectedDeviceId = selectedDevice.Id;
                     ShowMessage($"已選中: {selectedDevice.Name} 通道{selectedChannel + 1}");
-                    StartVideoButton.IsEnabled = selectedDevice.IsOnline && (_selectedPlayer != null);
+                    if (StartVideoButton != null) StartVideoButton.IsEnabled = selectedDevice.IsOnline && (_selectedPlayer != null);
                 }
                 else
                 {
                     _selectedDeviceId = null;
-                    StartVideoButton.IsEnabled = false;
+                    if (StartVideoButton != null) StartVideoButton.IsEnabled = false;
                 }
             }
             else
             {
                 _selectedDeviceId = null;
-                StartVideoButton.IsEnabled = false;
+                if (StartVideoButton != null) StartVideoButton.IsEnabled = false;
             }
         }
 
@@ -715,8 +856,10 @@ namespace SentryX
         /// </summary>
         private void DeviceListBox_MouseDoubleClick(object sender, MouseButtonEventArgs e)
         {
+            if (!_isUIInitialized) return;
+
             // 如果開始播放按鈕可用，就模擬點擊它
-            if (StartVideoButton.IsEnabled && _selectedPlayer != null)
+            if (StartVideoButton?.IsEnabled == true && _selectedPlayer != null)
             {
                 StartVideoButton_Click(sender, new RoutedEventArgs());
             }
@@ -733,6 +876,8 @@ namespace SentryX
         /// </summary>
         private void OnDeviceChanged(DeviceInfo device)
         {
+            if (!_isUIInitialized) return;
+
             try
             {
                 // 確保在主執行緒中執行，並檢查 UI 是否已載入
@@ -755,6 +900,8 @@ namespace SentryX
         /// </summary>
         private void OnSDKMessage(string message)
         {
+            if (!_isUIInitialized) return;
+
             try
             {
                 Dispatcher.Invoke(() => ShowMessage($"SDK: {message}"));
@@ -786,6 +933,8 @@ namespace SentryX
         /// </summary>
         private void RefreshDeviceList()
         {
+            if (!_isUIInitialized) return;
+
             try
             {
                 // 檢查 DeviceListBox 是否存在
@@ -847,7 +996,7 @@ namespace SentryX
         /// </summary>
         private int ExtractChannelFromSelection()
         {
-            if (DeviceListBox.SelectedItem is string selectedText)
+            if (DeviceListBox?.SelectedItem is string selectedText)
             {
                 // 檢查是否選中了通道項目
                 if (selectedText.Contains("通道") && selectedText.Contains("CH"))
@@ -879,6 +1028,8 @@ namespace SentryX
         /// </summary>
         private void UpdateStatusBar()
         {
+            if (!_isUIInitialized) return;
+
             try
             {
                 var totalDevices = DahuaSDK.TotalDeviceCount;
@@ -916,7 +1067,7 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 顯示訊息 - 修正版本，加入 null 檢查
+        /// 顯示訊息 - 強化版本，加入更多 null 檢查
         /// </summary>
         private void ShowMessage(string message)
         {
@@ -924,8 +1075,8 @@ namespace SentryX
             {
                 string timestampedMessage = $"[{DateTime.Now:HH:mm:ss}] {message}";
 
-                // 加入 null 檢查，確保 UI 元素已經載入
-                if (StatusTextBlock != null)
+                // 強化 null 檢查，確保 UI 元素已經載入
+                if (_isUIInitialized && StatusTextBlock != null)
                 {
                     StatusTextBlock.Text += timestampedMessage + "\n";
                 }
@@ -934,7 +1085,7 @@ namespace SentryX
                 Console.WriteLine(timestampedMessage);
 
                 // 自動捲動也要檢查是否存在
-                if (StatusScrollViewer != null)
+                if (_isUIInitialized && StatusScrollViewer != null)
                 {
                     StatusScrollViewer.ScrollToEnd();
                 }

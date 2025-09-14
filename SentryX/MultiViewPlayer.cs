@@ -37,11 +37,6 @@ namespace SentryX
         private Panel _videoPanel;
 
         /// <summary>
-        /// 狀態標籤
-        /// </summary>
-        private Label _statusLabel;
-
-        /// <summary>
         /// 視頻播放器
         /// </summary>
         private SimpleVideoPlayer? _videoPlayer;
@@ -72,12 +67,12 @@ namespace SentryX
         public event Action<MultiViewPlayer>? Selected;
 
         /// <summary>
-        /// 正常邊框顏色
+        /// 正常邊框顏色（灰色分割線）
         /// </summary>
         private static readonly Color NormalBorderColor = Color.Gray;
 
         /// <summary>
-        /// 選中時的邊框顏色
+        /// 選中時的邊框顏色（紅色）
         /// </summary>
         private static readonly Color SelectedBorderColor = Color.Red;
 
@@ -93,7 +88,6 @@ namespace SentryX
                 {
                     _isSelected = value;
                     UpdateBorderColor();
-                    UpdateStatusLabel();
                 }
             }
         }
@@ -101,7 +95,7 @@ namespace SentryX
         // === 建構子 ===
 
         /// <summary>
-        /// 建立新的多視圖播放器
+        /// 建立新的多視圖播放器 - 立即顯示灰色分割線
         /// </summary>
         /// <param name="index">播放器索引</param>
         public MultiViewPlayer(int index)
@@ -111,9 +105,9 @@ namespace SentryX
             // 建立外層容器面板（用於邊框效果）
             _containerPanel = new Panel
             {
-                BackColor = NormalBorderColor,
+                BackColor = NormalBorderColor, // 立即設定灰色背景作為邊框
                 Dock = DockStyle.Fill,
-                Padding = new Padding(1) // 1像素的邊框
+                Padding = new Padding(1) // 1像素的灰色邊框
             };
 
             // 建立視頻顯示面板（內層，黑色背景）
@@ -123,25 +117,11 @@ namespace SentryX
                 Dock = DockStyle.Fill
             };
 
-            // 註冊滑鼠點擊事件到容器面板
+            // 註冊滑鼠點擊事件
             _containerPanel.MouseClick += OnContainer_MouseClick;
             _videoPanel.MouseClick += OnVideoPanel_MouseClick;
 
-            // 建立狀態標籤
-            _statusLabel = new Label
-            {
-                Text = $"分割 {index + 1}\n等待播放...",
-                ForeColor = Color.White,
-                BackColor = Color.FromArgb(128, 0, 0, 0), // 半透明黑色
-                Location = new Point(5, 5),
-                AutoSize = false,
-                Size = new Size(120, 40),
-                Font = new Font("Microsoft Sans Serif", 8, FontStyle.Bold),
-                TextAlign = ContentAlignment.TopLeft
-            };
-            _videoPanel.Controls.Add(_statusLabel);
-
-            // 組裝控制項層次：容器 -> 視頻面板 -> 狀態標籤
+            // 組裝控制項層次：容器面板（灰色邊框）-> 視頻面板（黑色內容）
             _containerPanel.Controls.Add(_videoPanel);
 
             // 建立 WindowsFormsHost
@@ -150,7 +130,10 @@ namespace SentryX
                 Child = _containerPanel
             };
 
-            Debug.WriteLine($"MultiViewPlayer {index} 已建立");
+            // 重要：在建構子最後確保邊框顏色正確設定
+            UpdateBorderColor();
+
+            Debug.WriteLine($"MultiViewPlayer {index} 已建立（立即顯示灰色分割線）");
         }
 
         // === 公開方法 ===
@@ -188,9 +171,6 @@ namespace SentryX
                 // 開始播放
                 if (_videoPlayer.StartPlay(deviceHandle, channel, windowHandle, deviceName))
                 {
-                    // 更新狀態標籤
-                    UpdateStatusLabel(deviceName, channel, streamType);
-                    
                     Debug.WriteLine($"MultiViewPlayer {Index}: 開始播放 {deviceName} 通道 {channel} ({streamType})");
                     return true;
                 }
@@ -221,9 +201,6 @@ namespace SentryX
                     _videoPlayer.StopPlay();
                     _videoPlayer.Dispose();
                     _videoPlayer = null;
-
-                    // 重置狀態標籤
-                    UpdateStatusLabel();
 
                     Debug.WriteLine($"MultiViewPlayer {Index}: 播放已停止");
                 }
@@ -263,7 +240,7 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 更新邊框顏色 - 只改變邊框，不改變內容區域
+        /// 更新邊框顏色 - 保持灰色分割線，選中時變紅色
         /// </summary>
         private void UpdateBorderColor()
         {
@@ -277,9 +254,9 @@ namespace SentryX
                 }
                 else
                 {
-                    // 正常時：灰色邊框，較細的邊框
+                    // 正常時：灰色邊框（分割線），標準邊框
                     _containerPanel.BackColor = NormalBorderColor;
-                    _containerPanel.Padding = new Padding(1); // 1像素灰色邊框
+                    _containerPanel.Padding = new Padding(1); // 1像素灰色邊框（分割線）
                 }
 
                 // 確保視頻面板始終保持黑色背景
@@ -287,68 +264,10 @@ namespace SentryX
                 {
                     _videoPanel.BackColor = Color.Black;
                 }
-            }
-        }
 
-        /// <summary>
-        /// 更新狀態標籤 - 重載版本（無參數）
-        /// </summary>
-        private void UpdateStatusLabel()
-        {
-            try
-            {
-                string baseText = $"分割 {Index + 1}";
-                string statusText = IsSelected ? " [已選中]" : "";
-                string playText = IsPlaying ? "" : "\n等待播放...";
-                
-                _statusLabel.Text = $"{baseText}{statusText}{playText}";
-
-                // 根據選中狀態調整標籤顏色
-                if (IsSelected)
-                {
-                    _statusLabel.ForeColor = Color.Yellow; // 選中時用黃色文字
-                    _statusLabel.BackColor = Color.FromArgb(150, 255, 0, 0); // 半透明紅色背景
-                }
-                else
-                {
-                    _statusLabel.ForeColor = Color.White; // 正常時用白色文字
-                    _statusLabel.BackColor = Color.FromArgb(128, 0, 0, 0); // 半透明黑色背景
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"MultiViewPlayer {Index}: 更新狀態標籤時發生異常 - {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// 更新狀態標籤 - 重載版本（有參數）
-        /// </summary>
-        private void UpdateStatusLabel(string deviceName, int channel, VideoStreamType streamType)
-        {
-            try
-            {
-                string streamText = streamType == VideoStreamType.Main ? "主" : "輔";
-                string baseText = $"分割 {Index + 1}";
-                string statusText = IsSelected ? " [已選中]" : "";
-                
-                _statusLabel.Text = $"{baseText}{statusText}\n{deviceName}\nCH{channel + 1} ({streamText})";
-
-                // 根據選中狀態調整標籤顏色
-                if (IsSelected)
-                {
-                    _statusLabel.ForeColor = Color.Yellow; // 選中時用黃色文字
-                    _statusLabel.BackColor = Color.FromArgb(150, 255, 0, 0); // 半透明紅色背景
-                }
-                else
-                {
-                    _statusLabel.ForeColor = Color.White; // 正常時用白色文字
-                    _statusLabel.BackColor = Color.FromArgb(128, 0, 0, 0); // 半透明黑色背景
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"MultiViewPlayer {Index}: 更新狀態標籤時發生異常 - {ex.Message}");
+                // 強制重新繪製控制項
+                _containerPanel.Invalidate();
+                _containerPanel.Update();
             }
         }
 
@@ -374,7 +293,6 @@ namespace SentryX
                     _videoPanel.MouseClick -= OnVideoPanel_MouseClick;
                 }
                 
-                _statusLabel?.Dispose();
                 _videoPanel?.Dispose();
                 _containerPanel?.Dispose();
                 HostControl?.Dispose();

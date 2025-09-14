@@ -81,6 +81,16 @@ namespace SentryX
         /// </summary>
         private int _consecutiveErrorCount = 0;
 
+        /// <summary>
+        /// 數據丟包計數器 - 用於監控性能
+        /// </summary>
+        private long _droppedFrameCount = 0;
+
+        /// <summary>
+        /// 最後一次性能報告時間
+        /// </summary>
+        private DateTime _lastPerformanceReport = DateTime.MinValue;
+
         // === 靜態變數：全部程式共用的資源 ===
 
         /// <summary>
@@ -212,7 +222,7 @@ namespace SentryX
                 // 第3步：清理視頻資訊
                 CurrentVideoInfo = null;
 
-                Debug.WriteLine($"視頻播放已停止，緩衝區重置次數: {_bufferResetCount}, 數據接收次數: {_dataReceiveCount}");
+                Debug.WriteLine($"視頻播放已停止，緩衝區重置次數: {_bufferResetCount}, 數據接收次數: {_dataReceiveCount}, 丟包次數: {_droppedFrameCount}");
             }
             catch (Exception ex)
             {
@@ -249,7 +259,9 @@ namespace SentryX
             // 重置統計計數器
             _bufferResetCount = 0;
             _dataReceiveCount = 0;
+            _droppedFrameCount = 0;
             _lastBufferResetTime = DateTime.MinValue;
+            _lastPerformanceReport = DateTime.Now;
         }
 
         /// <summary>
@@ -285,7 +297,7 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 初始化 Play SDK 播放器（每個播放器都要做）- 優化多播放器支援
+        /// 初始化 Play SDK 播放器（每個播放器都要做）- 進一步優化多播放器支援
         /// </summary>
         /// <returns>是否初始化成功</returns>
         private bool InitializePlaySDK()
@@ -310,8 +322,8 @@ namespace SentryX
                 // 第3步：根據用戶選擇設定解碼引擎
                 SetupDecodeEngine();
 
-                // 第4步：開啟串流緩衝區（調整緩衝區大小以支援多播放器）- 修正類型轉換
-                uint bufferSize = (uint)(_globalPlayerCount > 16 ? 2 * 1024 * 1024 : 5 * 1024 * 1024); // 多播放器時減少緩衝區
+                // 第4步：根據播放器數量動態調整緩衝區大小
+                uint bufferSize = CalculateOptimalBufferSize();
                 if (!PlaySDK.PLAY_OpenStream(_playPort, IntPtr.Zero, 0, bufferSize))
                 {
                     Debug.WriteLine($"開啟串流失敗，緩衝區大小: {bufferSize}");
@@ -333,6 +345,40 @@ namespace SentryX
                 Debug.WriteLine($"初始化 Play SDK 時異常：{ex.Message}");
                 return false;
             }
+        }
+
+        /// <summary>
+        /// 計算最佳緩衝區大小
+        /// </summary>
+        private uint CalculateOptimalBufferSize()
+        {
+            // 根據播放器數量和碼流類型動態調整
+            uint baseSize;
+            
+            if (_globalPlayerCount <= 4)
+            {
+                baseSize = 5 * 1024 * 1024; // 5MB - 少量播放器時較大緩衝區
+            }
+            else if (_globalPlayerCount <= 16)
+            {
+                baseSize = 3 * 1024 * 1024; // 3MB - 中等數量時中等緩衝區
+            }
+            else if (_globalPlayerCount <= 32)
+            {
+                baseSize = 1 * 1024 * 1024; // 1MB - 大量播放器時較小緩衝區
+            }
+            else
+            {
+                baseSize = 512 * 1024; // 512KB - 極大量播放器時最小緩衝區
+            }
+
+            // 輔碼流使用更小的緩衝區
+            if (_streamType == VideoStreamType.Sub)
+            {
+                baseSize = baseSize / 2;
+            }
+
+            return baseSize;
         }
 
         /// <summary>
@@ -521,7 +567,7 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 視頻數據回調函數 - 當收到視頻數據時自動呼叫並更新統計資訊
+        /// 視頻數據回調函數 - 當收到視頻數據時自動呼叫並更新統計資訊（優化版本）
         /// </summary>
         private void OnVideoDataReceived(IntPtr lRealHandle, uint dwDataType, IntPtr pBuffer, uint dwBufSize, IntPtr param, IntPtr dwUser)
         {
@@ -531,13 +577,20 @@ namespace SentryX
                 if (!_isPlaying || _playPort == -1) return;
 
                 // 檢查數據是否有效
-                if (pBuffer == IntPtr.Zero || dwBufSize == 0) return;
+                if (pBuffer == IntPtr.Zero || dwBufSize == 0) 
+                {
+                    _droppedFrameCount++;
+                    return;
+                }
 
                 // 增加數據接收計數
                 Interlocked.Increment(ref _dataReceiveCount);
 
-                // 更新視頻統計資訊
-                UpdateVideoStatistics(dwBufSize, dwDataType);
+                // 更新視頻統計資訊（降低頻率）
+                if (_dataReceiveCount % 30 == 0) // 每30幀更新一次統計
+                {
+                    UpdateVideoStatistics(dwBufSize, dwDataType);
+                }
 
                 // 將數據送給 Play SDK 進行解碼和顯示
                 bool result = PlaySDK.PLAY_InputData(_playPort, pBuffer, dwBufSize);
@@ -551,14 +604,14 @@ namespace SentryX
                         // 增加緩衝區重置計數
                         _bufferResetCount++;
                         
-                        // 檢查重置頻率，如果過於頻繁則記錄警告
+                        // 檢查重置頻率，如果過於頻繁則記錄警告（減少日誌頻率）
                         var now = DateTime.Now;
                         if (_lastBufferResetTime != DateTime.MinValue)
                         {
                             var timeSinceLastReset = (now - _lastBufferResetTime).TotalSeconds;
-                            if (timeSinceLastReset < 1.0) // 1秒內重置多次
+                            if (timeSinceLastReset < 2.0 && _bufferResetCount % 5 == 0) // 降低警告頻率
                             {
-                                Debug.WriteLine($"警告：緩衝區重置過於頻繁，時間間隔: {timeSinceLastReset:F2}秒，總重置次數: {_bufferResetCount}");
+                                Debug.WriteLine($"警告：緩衝區重置頻繁，間隔: {timeSinceLastReset:F2}秒，重置次數: {_bufferResetCount}，全域播放器: {_globalPlayerCount}");
                             }
                         }
                         _lastBufferResetTime = now;
@@ -566,8 +619,8 @@ namespace SentryX
                         // 緩衝區滿了，重置一下（清空緩衝區）
                         PlaySDK.PLAY_ResetSourceBuffer(_playPort);
                         
-                        // 只有在重置次數較少時才記錄
-                        if (_bufferResetCount % 10 == 0) // 每10次重置才記錄一次
+                        // 減少日誌頻率 - 每20次重置才記錄一次
+                        if (_bufferResetCount % 20 == 0)
                         {
                             Debug.WriteLine($"Play SDK 緩衝區已重置 (第{_bufferResetCount}次)，全域播放器數量: {_globalPlayerCount}");
                         }
@@ -575,7 +628,7 @@ namespace SentryX
                     else
                     {
                         _consecutiveErrorCount++;
-                        if (_consecutiveErrorCount > 10)
+                        if (_consecutiveErrorCount > 20) // 提高錯誤閾值
                         {
                             Debug.WriteLine($"連續輸入數據失敗，錯誤代碼: {error}，連續錯誤次數: {_consecutiveErrorCount}");
                         }
@@ -585,10 +638,33 @@ namespace SentryX
                 {
                     _consecutiveErrorCount = 0; // 成功時重置錯誤計數器
                 }
+
+                // 定期性能報告（每60秒一次）
+                var timeSinceLastReport = (DateTime.Now - _lastPerformanceReport).TotalSeconds;
+                if (timeSinceLastReport >= 60)
+                {
+                    ReportPerformanceStatistics();
+                    _lastPerformanceReport = DateTime.Now;
+                }
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"處理視頻數據時異常：{ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 報告性能統計
+        /// </summary>
+        private void ReportPerformanceStatistics()
+        {
+            if (CurrentVideoInfo != null)
+            {
+                var elapsed = (DateTime.Now - CurrentVideoInfo.StartTime).TotalSeconds;
+                var avgFps = elapsed > 0 ? CurrentVideoInfo.TotalFrames / elapsed : 0;
+                var avgBitrate = elapsed > 0 ? (CurrentVideoInfo.TotalBytes * 8) / (elapsed * 1000) : 0;
+                
+                Debug.WriteLine($"性能報告 - 端口{_playPort}: FPS={avgFps:F1}, 碼率={avgBitrate:F1}kbps, 重置={_bufferResetCount}, 丟包={_droppedFrameCount}");
             }
         }
 
@@ -613,9 +689,9 @@ namespace SentryX
                 // 更新時間戳
                 CurrentVideoInfo.LastUpdate = DateTime.Now;
 
-                // 每秒更新一次計算結果
+                // 每5秒更新一次計算結果（降低計算頻率）
                 var elapsed = (DateTime.Now - CurrentVideoInfo.StartTime).TotalSeconds;
-                if (elapsed >= 1.0)
+                if (elapsed >= 5.0)
                 {
                     CurrentVideoInfo.Fps = CurrentVideoInfo.CalculateActualFps();
                     CurrentVideoInfo.Bitrate = CurrentVideoInfo.CalculateActualBitrate();
@@ -672,6 +748,11 @@ namespace SentryX
         /// 數據接收次數
         /// </summary>
         public long DataReceiveCount => _dataReceiveCount;
+
+        /// <summary>
+        /// 丟包次數
+        /// </summary>
+        public long DroppedFrameCount => _droppedFrameCount;
 
         /// <summary>
         /// 全域播放器數量

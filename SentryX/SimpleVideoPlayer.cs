@@ -1,11 +1,13 @@
-﻿// SimpleVideoPlayer.cs - 極簡視頻播放器
-// 這個檔案負責播放攝影機的視頻，支援不同的解碼模式和碼流類型
+﻿// SimpleVideoPlayer.cs - 極簡視頻播放器 - 完整修正版本
+// 修正停止播放後無法重新播放的問題
 
 using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using NetSDKCS;
 using System.Threading;
+using System.Drawing; // GDI+ 繪圖
+using System.Windows.Forms; // Windows Forms 控件支援
 
 namespace SentryX
 {
@@ -22,12 +24,12 @@ namespace SentryX
         private int _playPort = -1;
 
         /// <summary>
-        /// 大華 SDK 的實時播放句柄 - 用來控制從攝影機接收數據
+        /// 大華 SDK 的實時播放句 handle - 用來控制從攝影機接收數據
         /// </summary>
         private IntPtr _realPlayHandle = IntPtr.Zero;
 
         /// <summary>
-        /// 顯示視頻的窗口句柄 - 告訴播放器要在哪個窗口顯示視頻
+        /// 顯示視頻的窗口句 handle - 告訴播放器要在哪個窗口顯示視頻
         /// </summary>
         private IntPtr _displayHandle = IntPtr.Zero;
 
@@ -130,13 +132,13 @@ namespace SentryX
             // 增加全域播放器計數
             Interlocked.Increment(ref _globalPlayerCount);
 
-            Debug.WriteLine($"SimpleVideoPlayer 已建立，解碼模式: {decodeMode}, 碼流: {streamType}, 全域播放器數量: {_globalPlayerCount}");
+            Debug.WriteLine($"SimpleVideoPlayer 已建立，解碼模式: {decodeMode}, 碃流: {streamType}, 全域播放器數量: {_globalPlayerCount}");
         }
 
         // === 公開方法：使用者會呼叫的方法 ===
 
         /// <summary>
-        /// 開始播放指定攝影機的視頻
+        /// 開始播放指定攝影機的視頻 - 修正版本，添加重新播放支援
         /// </summary>
         /// <param name="deviceHandle">攝影機設備的登入句柄</param>
         /// <param name="channel">要播放的通道號（0=第1個通道）</param>
@@ -160,26 +162,37 @@ namespace SentryX
                     Debug.WriteLine($"警告：當前播放器數量過多 ({_globalPlayerCount})，可能影響性能");
                 }
 
-                // 第3步：如果已經在播放其他視頻，先停止
+                // 第3步：如果已經在播放，完全停止並清理
                 if (_isPlaying)
                 {
+                    Debug.WriteLine("檢測到正在播放，先完全停止");
                     StopPlay();
+
+                    // 等待清理完成
+                    System.Threading.Thread.Sleep(100);
                 }
 
-                // 第4步：記住要在哪個窗口顯示視頻
+                // 第4步：確保所有資源都已清理
+                if (_playPort != -1)
+                {
+                    Debug.WriteLine("檢測到殘留的播放端口，先清理");
+                    CleanupPlaySDK();
+                }
+
+                // 第5步：記住要在哪個窗口顯示視頻
                 _displayHandle = windowHandle;
 
-                // 第5步：初始化視頻資訊
+                // 第6步：初始化視頻資訊
                 InitializeVideoInfo(deviceName, channel);
 
-                // 第6步：初始化 Play SDK 播放器（準備解碼環境）
+                // 第7步：初始化 Play SDK 播放器（準備解碼環境）
                 if (!InitializePlaySDK())
                 {
                     Debug.WriteLine("Play SDK 初始化失敗");
                     return false;
                 }
 
-                // 第7步：開始從大華攝影機接收數據
+                // 第8步：開始從大華攝影機接收數據
                 if (!StartReceiveData(deviceHandle, channel))
                 {
                     Debug.WriteLine("開始接收視頻數據失敗");
@@ -187,7 +200,7 @@ namespace SentryX
                     return false;
                 }
 
-                // 第8步：標記為正在播放
+                // 第9步：標記為正在播放
                 _isPlaying = true;
                 _consecutiveErrorCount = 0; // 重置錯誤計數器
                 Debug.WriteLine($"視頻播放開始成功，設備: {deviceName}, 通道: {channel}, 碼流: {_streamType}");
@@ -201,7 +214,7 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 停止視頻播放
+        /// 停止視頻播放 - 完全修正版本，確保可以重新播放
         /// </summary>
         public void StopPlay()
         {
@@ -210,24 +223,243 @@ namespace SentryX
                 // 如果沒在播放，就不需要停止
                 if (!_isPlaying) return;
 
-                // 標記為不在播放
+                Debug.WriteLine($"開始停止視頻播放，端口: {_playPort}");
+
+                // 標記為不在播放（提早設定，避免回調函數繼續處理）
                 _isPlaying = false;
 
                 // 第1步：停止從攝影機接收數據
                 StopReceiveData();
 
-                // 第2步：清理 Play SDK 資源
+                // 第2步：等待一下讓數據回調完全停止
+                System.Threading.Thread.Sleep(50);
+
+                // 第3步：清理 Play SDK 資源
                 CleanupPlaySDK();
 
-                // 第3步：清理視頻資訊
-                CurrentVideoInfo = null;
+                // 第4步：清除顯示區域（但不清除 displayHandle）
+                ClearDisplayArea();
 
-                Debug.WriteLine($"視頻播放已停止，緩衝區重置次數: {_bufferResetCount}, 數據接收次數: {_dataReceiveCount}, 丟包次數: {_droppedFrameCount}");
+                // 第5步：重置統計變數（但保留 displayHandle）
+                ResetPlayerStateButKeepHandle();
+
+                Debug.WriteLine($"視頻播放已完全停止，緩衝區重置次數: {_bufferResetCount}, 數據接收次數: {_dataReceiveCount}, 丟包次數: {_droppedFrameCount}");
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"停止播放時發生異常：{ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// 重置播放器狀態但保留顯示句柄 - 修正版本
+        /// </summary>
+        private void ResetPlayerStateButKeepHandle()
+        {
+            try
+            {
+                // 重置統計計數器
+                _bufferResetCount = 0;
+                _dataReceiveCount = 0;
+                _droppedFrameCount = 0;
+                _consecutiveErrorCount = 0;
+
+                // 重置時間戱
+                _lastBufferResetTime = DateTime.MinValue;
+                _lastPerformanceReport = DateTime.MinValue;
+
+                // 清理視頻資訊
+                CurrentVideoInfo = null;
+
+                // 重要：保留 _displayHandle，因為下次播放還需要用到
+                // _displayHandle = IntPtr.Zero; // <-- 不要重置這個
+
+                Debug.WriteLine("播放器狀態已重置（保留 displayHandle）");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"重置播放器狀態時發生異常：{ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 清除顯示區域 - 改進版本，更溫和的清除方式
+        /// </summary>
+        private void ClearDisplayArea()
+        {
+            try
+            {
+                if (_displayHandle != IntPtr.Zero)
+                {
+                    // 方法1：使用 Control.FromHandle 進行 WinForms 特定清除
+                    try
+                    {
+                        var control = Control.FromHandle(_displayHandle);
+                        if (control != null && !control.IsDisposed)
+                        {
+                            // 檢查是否需要 Invoke
+                            if (control.InvokeRequired)
+                            {
+                                control.Invoke(new Action(() =>
+                                {
+                                    control.BackColor = Color.Black;
+                                    control.Invalidate(true);
+                                    control.Update();
+                                }));
+                            }
+                            else
+                            {
+                                control.BackColor = Color.Black;
+                                control.Invalidate(true);
+                                control.Update();
+                            }
+
+                            Debug.WriteLine("使用 Control 方式清除顯示區域成功");
+                            return; // 如果成功就直接返回
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"Control 方式清除失敗：{ex.Message}，嘗試其他方法");
+                    }
+
+                    // 方法2：使用 GDI+ 清除（備用方法）
+                    try
+                    {
+                        using (var graphics = Graphics.FromHwnd(_displayHandle))
+                        {
+                            graphics.Clear(Color.Black);
+                            graphics.Flush();
+                        }
+                        Debug.WriteLine("使用 GDI+ 方式清除顯示區域成功");
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"GDI+ 方式清除失敗：{ex.Message}");
+
+                        // 方法3：最後備用 - Win32 API
+                        try
+                        {
+                            ClearDisplayAreaWithWin32();
+                        }
+                        catch (Exception ex2)
+                        {
+                            Debug.WriteLine($"Win32 方式清除也失敗：{ex2.Message}");
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"清除顯示區域時發生異常：{ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 使用 Win32 API 清除顯示區域
+        /// </summary>
+        private void ClearDisplayAreaWithWin32()
+        {
+            if (_displayHandle != IntPtr.Zero)
+            {
+                var hdc = GetDC(_displayHandle);
+                if (hdc != IntPtr.Zero)
+                {
+                    try
+                    {
+                        // 修正：使用正確的 RECT 結構類型
+                        RECT rect = ConvertToWin32Rect(GetControlClientRect(_displayHandle));
+                        var brush = CreateSolidBrush(0x000000); // 黑色
+
+                        if (brush != IntPtr.Zero)
+                        {
+                            FillRect(hdc, ref rect, brush);
+                            DeleteObject(brush);
+                        }
+                    }
+                    finally
+                    {
+                        ReleaseDC(_displayHandle, hdc);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// 將 System.Drawing.Rectangle 轉換為 Win32 RECT 結構
+        /// </summary>
+        private RECT ConvertToWin32Rect(Rectangle rectangle)
+        {
+            return new RECT
+            {
+                Left = rectangle.Left,
+                Top = rectangle.Top,
+                Right = rectangle.Right,
+                Bottom = rectangle.Bottom
+            };
+        }
+
+        /// <summary>
+        /// 取得控件的客戶區矩形
+        /// </summary>
+        private Rectangle GetControlClientRect(IntPtr handle)
+        {
+            try
+            {
+                // 方法1：嘗試將句柄轉換為 Control 並取得其大小
+                var control = Control.FromHandle(handle);
+                if (control != null && !control.IsDisposed)
+                {
+                    return control.ClientRectangle;
+                }
+            }
+            catch
+            {
+                // 如果轉換失敗，使用 Win32 API
+            }
+
+            // 方法2：使用 Win32 API 取得窗口大小
+            if (GetClientRect(handle, out RECT rect))
+            {
+                return new Rectangle(rect.Left, rect.Top, rect.Right - rect.Left, rect.Bottom - rect.Top);
+            }
+
+            // 如果都失敗，返回預設大小
+            return new Rectangle(0, 0, 320, 240);
+        }
+
+        // Win32 API 聲明
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetDC(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+
+        [DllImport("gdi32.dll")]
+        private static extern IntPtr CreateSolidBrush(uint crColor);
+
+        [DllImport("user32.dll")]
+        private static extern int FillRect(IntPtr hDC, ref RECT lprc, IntPtr hbr);
+
+        [DllImport("gdi32.dll")]
+        private static extern bool DeleteObject(IntPtr hObject);
+
+        [DllImport("user32.dll")]
+        private static extern bool InvalidateRect(IntPtr hWnd, IntPtr lpRect, bool bErase);
+
+        [DllImport("user32.dll")]
+        private static extern bool UpdateWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct RECT
+        {
+            public int Left;
+            public int Top;
+            public int Right;
+            public int Bottom;
         }
 
         // === 私有方法：內部使用的方法，外部不能直接呼叫 ===
@@ -246,11 +478,11 @@ namespace SentryX
                 LastUpdate = DateTime.Now,
                 TotalFrames = 0,
                 TotalBytes = 0,
-                
+
                 // 根據碼流類型設定預設解析度
                 Width = _streamType == VideoStreamType.Main ? 1920 : 704,
                 Height = _streamType == VideoStreamType.Main ? 1080 : 576,
-                
+
                 // 預估FPS和碼率（實際數值會在播放時更新）
                 Fps = _streamType == VideoStreamType.Main ? 25.0 : 15.0,
                 Bitrate = _streamType == VideoStreamType.Main ? 4000.0 : 512.0
@@ -354,7 +586,7 @@ namespace SentryX
         {
             // 根據播放器數量和碼流類型動態調整
             uint baseSize;
-            
+
             if (_globalPlayerCount <= 4)
             {
                 baseSize = 5 * 1024 * 1024; // 5MB - 少量播放器時較大緩衝區
@@ -473,14 +705,14 @@ namespace SentryX
             try
             {
                 // 根據碼流類型選擇相應的播放類型
-                EM_RealPlayType playType = _streamType == VideoStreamType.Main 
+                EM_RealPlayType playType = _streamType == VideoStreamType.Main
                     ? EM_RealPlayType.EM_A_RType_Realplay_0      // 主碼流
                     : EM_RealPlayType.EM_A_RType_Realplay_1;     // 輔碼流
 
                 // 開始即時播放（從大華攝影機取得數據）
                 // 注意：這裡的 hWnd 設為 IntPtr.Zero，因為我們用 Play SDK 來顯示
                 _realPlayHandle = NETClient.RealPlay(
-                    deviceHandle,                                 // 攝影機設備的登入句Handlesns
+                    deviceHandle,                                 // 攝影機設備的登入句 handle
                     channel,                                      // 要播放的通道號
                     IntPtr.Zero,                                  // 不直接顯示到窗口
                     playType                                      // 播放類型（主碼流或輔碼流）
@@ -491,13 +723,13 @@ namespace SentryX
                 {
                     string error = NETClient.GetLastError();
                     Debug.WriteLine($"開始即時播放失敗：{error}");
-                    
+
                     // 如果是連線失敗，可能是設備負載過重
                     if (error.Contains("Failed to get connect session information"))
                     {
                         Debug.WriteLine($"設備連線會話信息獲取失敗，可能原因：設備負載過重或網路問題，當前全域播放器數量: {_globalPlayerCount}");
                     }
-                    
+
                     return false;
                 }
 
@@ -539,7 +771,7 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 清理 Play SDK 資源
+        /// 清理 Play SDK 資源 - 加強版本
         /// </summary>
         private void CleanupPlaySDK()
         {
@@ -548,13 +780,16 @@ namespace SentryX
                 try
                 {
                     // 停止播放
-                    PlaySDK.PLAY_Stop(_playPort);
+                    bool stopResult = PlaySDK.PLAY_Stop(_playPort);
+                    Debug.WriteLine($"PLAY_Stop 結果: {stopResult}");
 
                     // 關閉串流
-                    PlaySDK.PLAY_CloseStream(_playPort);
+                    bool closeResult = PlaySDK.PLAY_CloseStream(_playPort);
+                    Debug.WriteLine($"PLAY_CloseStream 結果: {closeResult}");
 
                     // 釋放端口
-                    PlaySDK.PLAY_ReleasePort(_playPort);
+                    bool releaseResult = PlaySDK.PLAY_ReleasePort(_playPort);
+                    Debug.WriteLine($"PLAY_ReleasePort 結果: {releaseResult}");
 
                     Debug.WriteLine($"清理 Play SDK 端口：{_playPort}");
                     _playPort = -1;
@@ -562,6 +797,8 @@ namespace SentryX
                 catch (Exception ex)
                 {
                     Debug.WriteLine($"清理 Play SDK 時異常：{ex.Message}");
+                    // 即使出現異常，也要重置端口號
+                    _playPort = -1;
                 }
             }
         }
@@ -577,7 +814,7 @@ namespace SentryX
                 if (!_isPlaying || _playPort == -1) return;
 
                 // 檢查數據是否有效
-                if (pBuffer == IntPtr.Zero || dwBufSize == 0) 
+                if (pBuffer == IntPtr.Zero || dwBufSize == 0)
                 {
                     _droppedFrameCount++;
                     return;
@@ -603,7 +840,7 @@ namespace SentryX
                     {
                         // 增加緩衝區重置計數
                         _bufferResetCount++;
-                        
+
                         // 檢查重置頻率，如果過於頻繁則記錄警告（減少日誌頻率）
                         var now = DateTime.Now;
                         if (_lastBufferResetTime != DateTime.MinValue)
@@ -618,7 +855,7 @@ namespace SentryX
 
                         // 緩衝區滿了，重置一下（清空緩衝區）
                         PlaySDK.PLAY_ResetSourceBuffer(_playPort);
-                        
+
                         // 減少日誌頻率 - 每20次重置才記錄一次
                         if (_bufferResetCount % 20 == 0)
                         {
@@ -663,7 +900,7 @@ namespace SentryX
                 var elapsed = (DateTime.Now - CurrentVideoInfo.StartTime).TotalSeconds;
                 var avgFps = elapsed > 0 ? CurrentVideoInfo.TotalFrames / elapsed : 0;
                 var avgBitrate = elapsed > 0 ? (CurrentVideoInfo.TotalBytes * 8) / (elapsed * 1000) : 0;
-                
+
                 Debug.WriteLine($"性能報告 - 端口{_playPort}: FPS={avgFps:F1}, 碼率={avgBitrate:F1}kbps, 重置={_bufferResetCount}, 丟包={_droppedFrameCount}");
             }
         }
@@ -686,7 +923,7 @@ namespace SentryX
                     CurrentVideoInfo.TotalFrames++;
                 }
 
-                // 更新時間戳
+                // 更新時間戱
                 CurrentVideoInfo.LastUpdate = DateTime.Now;
 
                 // 每5秒更新一次計算結果（降低計算頻率）
@@ -713,10 +950,10 @@ namespace SentryX
             if (!_disposed)
             {
                 StopPlay();
-                
+
                 // 減少全域播放器計數
                 Interlocked.Decrement(ref _globalPlayerCount);
-                
+
                 _disposed = true;
                 Debug.WriteLine($"SimpleVideoPlayer 已銷毀，剩餘全域播放器數量: {_globalPlayerCount}");
             }

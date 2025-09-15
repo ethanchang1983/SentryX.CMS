@@ -1,5 +1,5 @@
-﻿// MultiViewPlayer.cs - 多視圖播放器
-// 這個檔案負責管理單個分割畫面的視頻播放和資訊顯示
+﻿// MultiViewPlayer.cs - 多視圖播放器 - 修正版本
+// 修正停止播放後無法重新播放和顯示問題
 
 using System;
 using System.Diagnostics;
@@ -77,7 +77,12 @@ namespace SentryX
         private static readonly Color SelectedBorderColor = Color.Red;
 
         /// <summary>
-        /// 是否被選中
+        /// 邊框寬度
+        /// </summary>
+        private const int BorderWidth = 2;
+
+        /// <summary>
+        /// 是否被選中 - 修正版本
         /// </summary>
         public bool IsSelected
         {
@@ -87,7 +92,17 @@ namespace SentryX
                 if (_isSelected != value)
                 {
                     _isSelected = value;
-                    UpdateBorderColor();
+                    Debug.WriteLine($"MultiViewPlayer {Index}: 選中狀態變更為 {value}");
+
+                    // 使用 BeginInvoke 確保在正確的線程上執行
+                    if (_containerPanel?.InvokeRequired == true)
+                    {
+                        _containerPanel.BeginInvoke(new Action(UpdateBorderColor));
+                    }
+                    else
+                    {
+                        UpdateBorderColor();
+                    }
                 }
             }
         }
@@ -95,33 +110,39 @@ namespace SentryX
         // === 建構子 ===
 
         /// <summary>
-        /// 建立新的多視圖播放器 - 立即顯示灰色分割線
+        /// 建立新的多視圖播放器 - 修正版本
         /// </summary>
         /// <param name="index">播放器索引</param>
         public MultiViewPlayer(int index)
         {
             Index = index;
 
-            // 建立外層容器面板（用於邊框效果）
-            _containerPanel = new Panel
-            {
-                BackColor = NormalBorderColor, // 立即設定灰色背景作為邊框
-                Dock = DockStyle.Fill,
-                Padding = new Padding(1) // 1像素的灰色邊框
-            };
-
             // 建立視頻顯示面板（內層，黑色背景）
             _videoPanel = new Panel
             {
                 BackColor = Color.Black,
+                Dock = DockStyle.None,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom
+            };
+
+            // 建立外層容器面板（用於邊框效果）
+            _containerPanel = new Panel
+            {
+                BackColor = NormalBorderColor, // 初始設為正常邊框顏色
                 Dock = DockStyle.Fill
             };
+
+            // 設定視頻面板的初始位置和大小
+            UpdateVideoPanelBounds();
 
             // 註冊滑鼠點擊事件
             _containerPanel.MouseClick += OnContainer_MouseClick;
             _videoPanel.MouseClick += OnVideoPanel_MouseClick;
 
-            // 組裝控制項層次：容器面板（灰色邊框）-> 視頻面板（黑色內容）
+            // 註冊容器面板的 Resize 事件
+            _containerPanel.Resize += OnContainer_Resize;
+
+            // 組裝控制項層次
             _containerPanel.Controls.Add(_videoPanel);
 
             // 建立 WindowsFormsHost
@@ -130,10 +151,7 @@ namespace SentryX
                 Child = _containerPanel
             };
 
-            // 重要：在建構子最後確保邊框顏色正確設定
-            UpdateBorderColor();
-
-            Debug.WriteLine($"MultiViewPlayer {index} 已建立（立即顯示灰色分割線）");
+            Debug.WriteLine($"MultiViewPlayer {index} 已建立（修正版本）");
         }
 
         // === 公開方法 ===
@@ -151,11 +169,20 @@ namespace SentryX
         {
             try
             {
-                // 如果已經在播放，先停止
+                Debug.WriteLine($"MultiViewPlayer {Index}: 準備開始播放 {deviceName} 通道 {channel}");
+
+                // 如果已經在播放，先完全停止
                 if (_videoPlayer != null)
                 {
+                    Debug.WriteLine($"MultiViewPlayer {Index}: 檢測到現有播放器，先停止");
                     StopPlay();
+
+                    // 等待清理完成
+                    System.Threading.Thread.Sleep(100);
                 }
+
+                // 確保顯示狀態正確
+                EnsureProperDisplayState();
 
                 // 建立新的播放器
                 _videoPlayer = new SimpleVideoPlayer(decodeMode, streamType);
@@ -171,7 +198,7 @@ namespace SentryX
                 // 開始播放
                 if (_videoPlayer.StartPlay(deviceHandle, channel, windowHandle, deviceName))
                 {
-                    Debug.WriteLine($"MultiViewPlayer {Index}: 開始播放 {deviceName} 通道 {channel} ({streamType})");
+                    Debug.WriteLine($"MultiViewPlayer {Index}: 開始播放成功 {deviceName} 通道 {channel} ({streamType})");
                     return true;
                 }
                 else
@@ -190,20 +217,27 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 停止播放視頻
+        /// 停止播放視頻 - 完全修正版本
         /// </summary>
         public void StopPlay()
         {
             try
             {
+                Debug.WriteLine($"MultiViewPlayer {Index}: 開始停止播放");
+
                 if (_videoPlayer != null)
                 {
                     _videoPlayer.StopPlay();
                     _videoPlayer.Dispose();
                     _videoPlayer = null;
 
-                    Debug.WriteLine($"MultiViewPlayer {Index}: 播放已停止");
+                    Debug.WriteLine($"MultiViewPlayer {Index}: 視頻播放器已清理");
                 }
+
+                // 完全重置顯示狀態
+                CompletelyResetDisplayState();
+
+                Debug.WriteLine($"MultiViewPlayer {Index}: 播放已停止並完全重置狀態");
             }
             catch (Exception ex)
             {
@@ -211,7 +245,55 @@ namespace SentryX
             }
         }
 
+        /// <summary>
+        /// 強制重新整理顯示
+        /// </summary>
+        public void RefreshDisplay()
+        {
+            try
+            {
+                CompletelyResetDisplayState();
+                Debug.WriteLine($"MultiViewPlayer {Index}: 已強制重新整理顯示");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"MultiViewPlayer {Index}: 強制重新整理顯示時發生異常 - {ex.Message}");
+            }
+        }
+
         // === 私有方法 ===
+
+        /// <summary>
+        /// 容器面板 Resize 事件
+        /// </summary>
+        private void OnContainer_Resize(object? sender, EventArgs e)
+        {
+            UpdateVideoPanelBounds();
+        }
+
+        /// <summary>
+        /// 更新視頻面板的位置和大小 - 修正版本
+        /// </summary>
+        private void UpdateVideoPanelBounds()
+        {
+            if (_containerPanel == null || _videoPanel == null) return;
+
+            try
+            {
+                // 固定使用統一的邊框寬度，不因選中狀態改變大小
+                _videoPanel.Location = new Point(BorderWidth, BorderWidth);
+                _videoPanel.Size = new Size(
+                    Math.Max(0, _containerPanel.ClientSize.Width - BorderWidth * 2),
+                    Math.Max(0, _containerPanel.ClientSize.Height - BorderWidth * 2)
+                );
+
+                Debug.WriteLine($"MultiViewPlayer {Index}: 視頻面板位置已更新 - Location: {_videoPanel.Location}, Size: {_videoPanel.Size}");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"MultiViewPlayer {Index}: 更新視頻面板位置時發生異常 - {ex.Message}");
+            }
+        }
 
         /// <summary>
         /// 容器面板滑鼠點擊事件
@@ -220,7 +302,6 @@ namespace SentryX
         {
             if (e.Button == MouseButtons.Left)
             {
-                // 觸發選中事件
                 Selected?.Invoke(this);
                 Debug.WriteLine($"MultiViewPlayer {Index}: 被點擊選中 (容器)");
             }
@@ -233,43 +314,128 @@ namespace SentryX
         {
             if (e.Button == MouseButtons.Left)
             {
-                // 觸發選中事件
                 Selected?.Invoke(this);
                 Debug.WriteLine($"MultiViewPlayer {Index}: 被點擊選中 (視頻區域)");
             }
         }
 
         /// <summary>
-        /// 更新邊框顏色 - 保持灰色分割線，選中時變紅色
+        /// 確保正確的顯示狀態
+        /// </summary>
+        private void EnsureProperDisplayState()
+        {
+            try
+            {
+                if (_videoPanel != null && _containerPanel != null)
+                {
+                    // 確保視頻面板為黑色
+                    _videoPanel.BackColor = Color.Black;
+
+                    // 確保容器面板顏色正確（根據選中狀態）
+                    _containerPanel.BackColor = _isSelected ? SelectedBorderColor : NormalBorderColor;
+
+                    // 確保視頻面板位置正確
+                    UpdateVideoPanelBounds();
+
+                    Debug.WriteLine($"MultiViewPlayer {Index}: 顯示狀態已確保正確");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"MultiViewPlayer {Index}: 確保顯示狀態時發生異常 - {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 完全重置顯示狀態 - 新增強化版本
+        /// </summary>
+        private void CompletelyResetDisplayState()
+        {
+            try
+            {
+                if (_videoPanel != null && _containerPanel != null)
+                {
+                    // 第1步：清除視頻面板的所有子控件
+                    if (_videoPanel.Controls.Count > 0)
+                    {
+                        _videoPanel.Controls.Clear();
+                    }
+
+                    // 第2步：強制重設視頻面板為黑色背景
+                    _videoPanel.BackColor = Color.Black;
+
+                    // 第3步：重設容器面板顏色（根據選中狀態）
+                    _containerPanel.BackColor = _isSelected ? SelectedBorderColor : NormalBorderColor;
+
+                    // 第4步：使用多種方法清除顯示內容
+                    if (_videoPanel.IsHandleCreated)
+                    {
+                        // 方法1：使用 Graphics 清除
+                        using (var graphics = _videoPanel.CreateGraphics())
+                        {
+                            graphics.Clear(Color.Black);
+                            graphics.Flush();
+                        }
+
+                        // 方法2：使用 Win32 API 強制重繪
+                        InvalidateRect(_videoPanel.Handle, IntPtr.Zero, true);
+                        UpdateWindow(_videoPanel.Handle);
+                    }
+
+                    // 第5步：重新設定正確的面板位置和大小
+                    UpdateVideoPanelBounds();
+
+                    // 第6步：強制重新繪製兩個面板
+                    _videoPanel.Invalidate(true);
+                    _videoPanel.Update();
+                    _containerPanel.Invalidate(true);
+                    _containerPanel.Update();
+
+                    // 第7步：強制重新整理父控件
+                    if (_containerPanel.Parent != null)
+                    {
+                        _containerPanel.Parent.Invalidate(true);
+                        _containerPanel.Parent.Update();
+                    }
+
+                    Debug.WriteLine($"MultiViewPlayer {Index}: 顯示狀態已完全重置");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"MultiViewPlayer {Index}: 完全重置顯示狀態時發生異常 - {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 更新邊框顏色 - 修正版本
         /// </summary>
         private void UpdateBorderColor()
         {
-            if (_containerPanel != null)
+            try
             {
-                if (_isSelected)
-                {
-                    // 選中時：紅色邊框，較粗的邊框
-                    _containerPanel.BackColor = SelectedBorderColor;
-                    _containerPanel.Padding = new Padding(3); // 3像素紅色邊框
-                }
-                else
-                {
-                    // 正常時：灰色邊框（分割線），標準邊框
-                    _containerPanel.BackColor = NormalBorderColor;
-                    _containerPanel.Padding = new Padding(1); // 1像素灰色邊框（分割線）
-                }
+                if (_containerPanel == null || _videoPanel == null) return;
 
-                // 確保視頻面板始終保持黑色背景
-                if (_videoPanel != null)
-                {
-                    _videoPanel.BackColor = Color.Black;
-                }
+                // 只更新容器面板的背景顏色（這會成為邊框顏色）
+                _containerPanel.BackColor = _isSelected ? SelectedBorderColor : NormalBorderColor;
 
-                // 強制重新繪製控制項
-                _containerPanel.Invalidate();
-                _containerPanel.Update();
+                // 確保視頻面板始終為黑色
+                _videoPanel.BackColor = Color.Black;
+
+                Debug.WriteLine($"MultiViewPlayer {Index}: 邊框顏色已更新，選中狀態: {_isSelected}");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"MultiViewPlayer {Index}: 更新邊框顏色時發生異常 - {ex.Message}");
             }
         }
+
+        // Win32 API 聲明
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool InvalidateRect(IntPtr hWnd, IntPtr lpRect, bool bErase);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool UpdateWindow(IntPtr hWnd);
 
         // === IDisposable 實作 ===
 
@@ -281,22 +447,23 @@ namespace SentryX
             if (!_disposed)
             {
                 StopPlay();
-                
+
                 // 移除事件處理器
                 if (_containerPanel != null)
                 {
                     _containerPanel.MouseClick -= OnContainer_MouseClick;
+                    _containerPanel.Resize -= OnContainer_Resize;
                 }
-                
+
                 if (_videoPanel != null)
                 {
                     _videoPanel.MouseClick -= OnVideoPanel_MouseClick;
                 }
-                
+
                 _videoPanel?.Dispose();
                 _containerPanel?.Dispose();
                 HostControl?.Dispose();
-                
+
                 _disposed = true;
                 Debug.WriteLine($"MultiViewPlayer {Index} 已釋放");
             }

@@ -1,9 +1,15 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
+using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
+using NetSDKCS;
 using MessageBox = System.Windows.MessageBox;
 
 namespace SentryX
@@ -12,10 +18,19 @@ namespace SentryX
     {
         // === 私有變數 ===
         private readonly ObservableCollection<DeviceInfo> _deviceCollection = new();
+        private readonly ObservableCollection<SearchedDeviceInfo> _searchResultCollection = new();
         private DeviceInfo? _selectedDevice = null;
+        private SearchedDeviceInfo? _selectedSearchResult = null;
 
         // ✅ 自動刷新計時器
         private readonly DispatcherTimer _autoRefreshTimer;
+
+        // ✅ 搜尋相關變數
+        private readonly List<string> _localIPList = new();
+        private readonly List<IntPtr> _searchIDList = new();
+        private readonly fSearchDevicesCBEx _searchDevicesCBEx;
+        private int _deviceSearchCount = 0;
+        private bool _isSearching = false;
 
         /// <summary>
         /// 設備管理視窗建構子
@@ -23,6 +38,10 @@ namespace SentryX
         public DeviceManagerWindow()
         {
             InitializeComponent();
+
+            // ✅ 初始化搜尋回調
+            _searchDevicesCBEx = new fSearchDevicesCBEx(SearchDevicesCBEx);
+
             InitializeUI();
             SubscribeToEvents();
             LoadExistingDevices();
@@ -44,6 +63,7 @@ namespace SentryX
         private void InitializeUI()
         {
             DeviceDataGrid.ItemsSource = _deviceCollection;
+            SearchResultDataGrid.ItemsSource = _searchResultCollection;
 
             DeviceNameTextBox.Text = "";
             DeviceIPTextBox.Text = "192.168.1.";
@@ -54,6 +74,7 @@ namespace SentryX
             EditDeviceButton.IsEnabled = false;
             RemoveDeviceButton.IsEnabled = false;
             LogoutDeviceButton.IsEnabled = false;
+            FillFromSearchButton.IsEnabled = false;
         }
 
         /// <summary>
@@ -90,7 +111,344 @@ namespace SentryX
             UpdateButtonStates();
         }
 
-        // === 事件處理方法 ===
+        // === ✅ 新增：設備搜尋相關方法 ===
+
+        /// <summary>
+        /// 搜尋設備按鈕點擊
+        /// </summary>
+        private void SearchDevicesButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (_isSearching)
+            {
+                AddStatusMessage("⚠️ 搜尋正在進行中，請等待完成或點擊停止");
+                return;
+            }
+
+            StartDeviceSearch();
+        }
+
+        /// <summary>
+        /// 停止搜尋按鈕點擊
+        /// </summary>
+        private void StopSearchButton_Click(object sender, RoutedEventArgs e)
+        {
+            StopDeviceSearch();
+        }
+
+        /// <summary>
+        /// 搜尋結果選擇變更
+        /// </summary>
+        private void SearchResultDataGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            _selectedSearchResult = SearchResultDataGrid.SelectedItem as SearchedDeviceInfo;
+            FillFromSearchButton.IsEnabled = _selectedSearchResult != null;
+
+            if (_selectedSearchResult != null)
+            {
+                AddStatusMessage($"選中搜尋結果: {_selectedSearchResult.IP} ({_selectedSearchResult.DeviceType}) - {_selectedSearchResult.InitStatusDisplay}");
+            }
+        }
+
+        /// <summary>
+        /// 搜尋結果雙擊 - 直接填入詳情
+        /// </summary>
+        private void SearchResultDataGrid_MouseDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            if (_selectedSearchResult != null)
+            {
+                FillFromSearchResult();
+            }
+        }
+
+        /// <summary>
+        /// 從搜尋結果填入按鈕點擊
+        /// </summary>
+        private void FillFromSearchButton_Click(object sender, RoutedEventArgs e)
+        {
+            FillFromSearchResult();
+        }
+
+        /// <summary>
+        /// 開始設備搜尋 - ✅ 修正跨執行緒問題
+        /// </summary>
+        private void StartDeviceSearch()
+        {
+            try
+            {
+                _isSearching = true;
+                SearchDevicesButton.IsEnabled = false;
+                StopSearchButton.IsEnabled = true;
+                SearchStatusText.Text = "正在搜尋...";
+
+                _searchResultCollection.Clear();
+                _deviceSearchCount = 0;
+
+                AddStatusMessage("🔍 開始搜尋網路設備...");
+
+                Task.Run(() =>
+                {
+                    try
+                    {
+                        // 取得所有網路介面
+                        GetAllNetworkInterface();
+
+                        // ✅ 使用 Dispatcher.Invoke 安全更新 UI
+                        Dispatcher.Invoke(() =>
+                        {
+                            if (_isSearching) // 再次檢查是否仍在搜尋狀態
+                            {
+                                SearchStatusText.Text = $"找到 {_localIPList.Count} 個網路介面，開始搜尋...";
+                            }
+                        });
+
+                        // 針對每個本地 IP 開始搜尋
+                        foreach (var localIP in _localIPList)
+                        {
+                            if (!_isSearching) break;
+
+                            var stuIn = new NET_IN_STARTSERACH_DEVICE
+                            {
+                                dwSize = (uint)Marshal.SizeOf(typeof(NET_IN_STARTSERACH_DEVICE)),
+                                emSendType = EM_SEND_SEARCH_TYPE.MULTICAST_AND_BROADCAST,
+                                cbSearchDevices = _searchDevicesCBEx,
+                                szLocalIp = localIP
+                            };
+
+                            var stuOut = new NET_OUT_STARTSERACH_DEVICE
+                            {
+                                dwSize = (uint)Marshal.SizeOf(typeof(NET_OUT_STARTSERACH_DEVICE))
+                            };
+
+                            IntPtr searchID = NETClient.StartSearchDevicesEx(ref stuIn, ref stuOut);
+                            if (searchID != IntPtr.Zero)
+                            {
+                                lock (_searchIDList) // ✅ 加入執行緒同步
+                                {
+                                    _searchIDList.Add(searchID);
+                                }
+                            }
+                        }
+
+                        // 搜尋10秒後自動停止
+                        System.Threading.Thread.Sleep(10000);
+
+                        if (_isSearching)
+                        {
+                            Dispatcher.Invoke(() => StopDeviceSearch());
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Dispatcher.Invoke(() =>
+                        {
+                            AddStatusMessage($"❌ 搜尋過程中發生錯誤: {ex.Message}");
+                            StopDeviceSearch();
+                        });
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                AddStatusMessage($"❌ 啟動搜尋時發生錯誤: {ex.Message}");
+                StopDeviceSearch();
+            }
+        }
+
+        /// <summary>
+        /// 停止設備搜尋 - ✅ 修正跨執行緒問題
+        /// </summary>
+        private void StopDeviceSearch()
+        {
+            try
+            {
+                _isSearching = false;
+                SearchDevicesButton.IsEnabled = true;
+                StopSearchButton.IsEnabled = false;
+
+                // ✅ 在背景執行緒中停止搜尋，避免阻塞 UI
+                Task.Run(() =>
+                {
+                    try
+                    {
+                        // 停止所有搜尋
+                        lock (_searchIDList) // ✅ 加入執行緒同步
+                        {
+                            foreach (var searchID in _searchIDList)
+                            {
+                                if (searchID != IntPtr.Zero)
+                                {
+                                    NETClient.StopSearchDevice(searchID);
+                                }
+                            }
+                            _searchIDList.Clear();
+                        }
+
+                        // ✅ 使用 Dispatcher.Invoke 安全更新 UI
+                        Dispatcher.Invoke(() =>
+                        {
+                            SearchStatusText.Text = $"搜尋完成，找到 {_deviceSearchCount} 個設備";
+                            AddStatusMessage($"🔍 設備搜尋完成，找到 {_deviceSearchCount} 個設備");
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        Dispatcher.Invoke(() =>
+                        {
+                            AddStatusMessage($"❌ 停止搜尋時發生錯誤: {ex.Message}");
+                        });
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                AddStatusMessage($"❌ 停止搜尋時發生錯誤: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 搜尋回調函數 - ✅ 修正跨執行緒問題
+        /// </summary>
+        private void SearchDevicesCBEx(IntPtr lSearchHandle, IntPtr pDevNetInfo, IntPtr dwUser)
+        {
+            try
+            {
+                if (!_isSearching || pDevNetInfo == IntPtr.Zero)
+                {
+                    return; // 提早退出，避免不必要的處理
+                }
+
+                var info = Marshal.PtrToStructure<NET_DEVICE_NET_INFO_EX2>(pDevNetInfo);
+
+                // ✅ 使用 BeginInvoke 進行非阻塞式 UI 更新
+                Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action<NET_DEVICE_NET_INFO_EX2>(UpdateSearchUI), info);
+            }
+            catch (Exception ex)
+            {
+                // ✅ 錯誤處理也要使用 Dispatcher
+                Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+                {
+                    AddStatusMessage($"❌ 搜尋回調錯誤: {ex.Message}");
+                }));
+            }
+        }
+
+        /// <summary>
+        /// 更新搜尋 UI - ✅ 確保在 UI 執行緒中執行
+        /// </summary>
+        private void UpdateSearchUI(NET_DEVICE_NET_INFO_EX2 info)
+        {
+            try
+            {
+                if (!_isSearching)
+                {
+                    return; // 如果已經停止搜尋，不再更新 UI
+                }
+
+                // 檢查是否已經存在相同 MAC 的設備
+                var existingDevice = _searchResultCollection.FirstOrDefault(d => d.MAC == info.stuDevInfo.szMac);
+                if (existingDevice != null)
+                {
+                    return; // 避免重複
+                }
+
+                _deviceSearchCount++;
+
+                var searchedDevice = new SearchedDeviceInfo
+                {
+                    Index = _deviceSearchCount,
+                    IsInitialized = (info.stuDevInfo.byInitStatus & 0x1) != 1,
+                    IPVersion = info.stuDevInfo.iIPVersion,
+                    IP = info.stuDevInfo.szIP,
+                    Port = info.stuDevInfo.nPort,
+                    SubMask = info.stuDevInfo.szSubmask,
+                    Gateway = info.stuDevInfo.szGateway,
+                    MAC = info.stuDevInfo.szMac,
+                    DeviceType = info.stuDevInfo.szDeviceType,
+                    DetailType = info.stuDevInfo.szNewDetailType,
+                    HttpPort = info.stuDevInfo.nHttpPort,
+                    LocalIP = info.szLocalIp
+                };
+
+                _searchResultCollection.Add(searchedDevice);
+
+                // ✅ 這些 UI 更新現在是安全的，因為我們在 UI 執行緒中
+                if (_isSearching && SearchStatusText != null)
+                {
+                    SearchStatusText.Text = $"已找到 {_deviceSearchCount} 個設備...";
+                }
+
+                AddStatusMessage($"🔍 發現設備: {searchedDevice.IP} ({searchedDevice.DeviceType}) - {searchedDevice.InitStatusDisplay}");
+            }
+            catch (Exception ex)
+            {
+                AddStatusMessage($"❌ 更新搜尋 UI 錯誤: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 從搜尋結果填入設備詳情
+        /// </summary>
+        private void FillFromSearchResult()
+        {
+            if (_selectedSearchResult == null) return;
+
+            DeviceNameTextBox.Text = $"{_selectedSearchResult.DeviceType}-{_selectedSearchResult.IP}";
+            DeviceIPTextBox.Text = _selectedSearchResult.IP;
+            DevicePortTextBox.Text = _selectedSearchResult.Port.ToString();
+            UsernameTextBox.Text = "admin";
+            PasswordBox.Password = "123456";
+
+            AddStatusMessage($"✅ 已從搜尋結果填入設備資訊: {_selectedSearchResult.IP}");
+            DeviceNameTextBox.Focus();
+        }
+
+        /// <summary>
+        /// 取得所有網路介面
+        /// </summary>
+        private void GetAllNetworkInterface()
+        {
+            _localIPList.Clear();
+
+            try
+            {
+                NetworkInterface[] nics = NetworkInterface.GetAllNetworkInterfaces();
+                foreach (NetworkInterface adapter in nics)
+                {
+                    if (adapter.NetworkInterfaceType == NetworkInterfaceType.Ethernet)
+                    {
+                        IPInterfaceProperties ip = adapter.GetIPProperties();
+                        UnicastIPAddressInformationCollection ipCollection = ip.UnicastAddresses;
+
+                        foreach (UnicastIPAddressInformation ipadd in ipCollection)
+                        {
+                            if (ipadd.Address.AddressFamily == AddressFamily.InterNetwork)
+                            {
+                                string tempIP = ipadd.Address.ToString();
+                                if (!_localIPList.Contains(tempIP))
+                                {
+                                    _localIPList.Add(tempIP);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ✅ 這個訊息會在背景執行緒中顯示，需要使用 Dispatcher
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    AddStatusMessage($"🌐 找到 {_localIPList.Count} 個本地網路介面");
+                }));
+            }
+            catch (Exception ex)
+            {
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    AddStatusMessage($"❌ 取得網路介面失敗: {ex.Message}");
+                }));
+            }
+        }
+
+        // === 原有的事件處理方法 ===
 
         /// <summary>
         /// 添加設備按鈕點擊
@@ -374,19 +732,35 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 視窗關閉事件
+        /// 視窗關閉事件 - ✅ 修正跨執行緒問題
         /// </summary>
         protected override void OnClosed(EventArgs e)
         {
-            // ✅ 停止自動刷新計時器
-            _autoRefreshTimer?.Stop();
+            try
+            {
+                // ✅ 停止設備搜尋
+                if (_isSearching)
+                {
+                    StopDeviceSearch();
+                }
 
-            // 取消事件訂閱
-            DahuaSDK.DeviceStatusChanged -= OnDeviceStatusChanged;
-            DahuaSDK.StatusMessage -= OnStatusMessage;
+                // ✅ 停止自動刷新計時器
+                _autoRefreshTimer?.Stop();
 
-            AddStatusMessage("🔄 自動刷新功能已停止");
-            base.OnClosed(e);
+                // 取消事件訂閱
+                DahuaSDK.DeviceStatusChanged -= OnDeviceStatusChanged;
+                DahuaSDK.StatusMessage -= OnStatusMessage;
+
+                AddStatusMessage("🔄 自動刷新功能已停止");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"視窗關閉時發生錯誤: {ex.Message}");
+            }
+            finally
+            {
+                base.OnClosed(e);
+            }
         }
     }
 }

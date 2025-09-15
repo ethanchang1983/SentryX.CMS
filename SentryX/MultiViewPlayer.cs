@@ -1,5 +1,5 @@
-﻿// MultiViewPlayer.cs - 多視圖播放器 - 修正版本
-// 修正停止播放後無法重新播放和顯示問題
+﻿// MultiViewPlayer.cs - 多視圖播放器 - 增強版本
+// 增加雙擊切換單/多分割畫面功能
 
 using System;
 using System.Diagnostics;
@@ -67,6 +67,11 @@ namespace SentryX
         public event Action<MultiViewPlayer>? Selected;
 
         /// <summary>
+        /// 當被雙擊時觸發的事件 - 新增
+        /// </summary>
+        public event Action<MultiViewPlayer>? DoubleClicked;
+
+        /// <summary>
         /// 正常邊框顏色（灰色分割線）
         /// </summary>
         private static readonly Color NormalBorderColor = Color.Gray;
@@ -80,6 +85,23 @@ namespace SentryX
         /// 邊框寬度
         /// </summary>
         private const int BorderWidth = 2;
+
+        /// <summary>
+        /// 記錄播放狀態的相關資訊 - 用於恢復播放
+        /// </summary>
+        public class PlaybackState
+        {
+            public IntPtr DeviceHandle { get; set; }
+            public int Channel { get; set; }
+            public DecodeMode DecodeMode { get; set; }
+            public VideoStreamType StreamType { get; set; }
+            public string DeviceName { get; set; } = "";
+        }
+
+        /// <summary>
+        /// 當前播放狀態 - 用於單/多分割切換時保持播放
+        /// </summary>
+        public PlaybackState? CurrentPlaybackState { get; private set; }
 
         /// <summary>
         /// 是否被選中 - 修正版本
@@ -110,7 +132,7 @@ namespace SentryX
         // === 建構子 ===
 
         /// <summary>
-        /// 建立新的多視圖播放器 - 修正版本
+        /// 建立新的多視圖播放器 - 增強版本
         /// </summary>
         /// <param name="index">播放器索引</param>
         public MultiViewPlayer(int index)
@@ -135,9 +157,11 @@ namespace SentryX
             // 設定視頻面板的初始位置和大小
             UpdateVideoPanelBounds();
 
-            // 註冊滑鼠點擊事件
+            // 註冊滑鼠事件 - 包括雙擊
             _containerPanel.MouseClick += OnContainer_MouseClick;
+            _containerPanel.MouseDoubleClick += OnContainer_MouseDoubleClick;
             _videoPanel.MouseClick += OnVideoPanel_MouseClick;
+            _videoPanel.MouseDoubleClick += OnVideoPanel_MouseDoubleClick;
 
             // 註冊容器面板的 Resize 事件
             _containerPanel.Resize += OnContainer_Resize;
@@ -151,13 +175,13 @@ namespace SentryX
                 Child = _containerPanel
             };
 
-            Debug.WriteLine($"MultiViewPlayer {index} 已建立（修正版本）");
+            Debug.WriteLine($"MultiViewPlayer {index} 已建立（增強版本，支援雙擊切換）");
         }
 
         // === 公開方法 ===
 
         /// <summary>
-        /// 開始播放視頻
+        /// 開始播放視頻 - 增強版本，記錄播放狀態
         /// </summary>
         /// <param name="deviceHandle">設備句柄</param>
         /// <param name="channel">通道號</param>
@@ -180,6 +204,16 @@ namespace SentryX
                     // 等待清理完成
                     System.Threading.Thread.Sleep(100);
                 }
+
+                // 記錄播放狀態 - 用於單/多分割切換
+                CurrentPlaybackState = new PlaybackState
+                {
+                    DeviceHandle = deviceHandle,
+                    Channel = channel,
+                    DecodeMode = decodeMode,
+                    StreamType = streamType,
+                    DeviceName = deviceName
+                };
 
                 // 確保顯示狀態正確
                 EnsureProperDisplayState();
@@ -205,6 +239,7 @@ namespace SentryX
                 {
                     _videoPlayer.Dispose();
                     _videoPlayer = null;
+                    CurrentPlaybackState = null; // 播放失敗，清除狀態
                     Debug.WriteLine($"MultiViewPlayer {Index}: 播放失敗");
                     return false;
                 }
@@ -212,18 +247,20 @@ namespace SentryX
             catch (Exception ex)
             {
                 Debug.WriteLine($"MultiViewPlayer {Index}: 開始播放時發生異常 - {ex.Message}");
+                CurrentPlaybackState = null; // 異常時清除狀態
                 return false;
             }
         }
 
         /// <summary>
-        /// 停止播放視頻 - 完全修正版本
+        /// 停止播放視頻 - 修正版本，保留播放狀態供恢復使用
         /// </summary>
-        public void StopPlay()
+        /// <param name="keepPlaybackState">是否保留播放狀態（用於單/多分割切換）</param>
+        public void StopPlay(bool keepPlaybackState = false)
         {
             try
             {
-                Debug.WriteLine($"MultiViewPlayer {Index}: 開始停止播放");
+                Debug.WriteLine($"MultiViewPlayer {Index}: 開始停止播放，保留狀態: {keepPlaybackState}");
 
                 if (_videoPlayer != null)
                 {
@@ -232,6 +269,12 @@ namespace SentryX
                     _videoPlayer = null;
 
                     Debug.WriteLine($"MultiViewPlayer {Index}: 視頻播放器已清理");
+                }
+
+                // 根據參數決定是否清除播放狀態
+                if (!keepPlaybackState)
+                {
+                    CurrentPlaybackState = null;
                 }
 
                 // 完全重置顯示狀態
@@ -243,6 +286,29 @@ namespace SentryX
             {
                 Debug.WriteLine($"MultiViewPlayer {Index}: 停止播放時發生異常 - {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// 恢復播放 - 使用保存的播放狀態
+        /// </summary>
+        /// <returns>是否成功恢復播放</returns>
+        public bool RestorePlay()
+        {
+            if (CurrentPlaybackState == null)
+            {
+                Debug.WriteLine($"MultiViewPlayer {Index}: 沒有保存的播放狀態，無法恢復");
+                return false;
+            }
+
+            Debug.WriteLine($"MultiViewPlayer {Index}: 恢復播放 {CurrentPlaybackState.DeviceName}");
+
+            return StartPlay(
+                CurrentPlaybackState.DeviceHandle,
+                CurrentPlaybackState.Channel,
+                CurrentPlaybackState.DecodeMode,
+                CurrentPlaybackState.StreamType,
+                CurrentPlaybackState.DeviceName
+            );
         }
 
         /// <summary>
@@ -272,6 +338,54 @@ namespace SentryX
         }
 
         /// <summary>
+        /// 容器面板滑鼠單擊事件
+        /// </summary>
+        private void OnContainer_MouseClick(object? sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left)
+            {
+                Selected?.Invoke(this);
+                Debug.WriteLine($"MultiViewPlayer {Index}: 被點擊選中 (容器)");
+            }
+        }
+
+        /// <summary>
+        /// 容器面板滑鼠雙擊事件 - 新增
+        /// </summary>
+        private void OnContainer_MouseDoubleClick(object? sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left)
+            {
+                DoubleClicked?.Invoke(this);
+                Debug.WriteLine($"MultiViewPlayer {Index}: 被雙擊 (容器)");
+            }
+        }
+
+        /// <summary>
+        /// 視頻面板滑鼠單擊事件
+        /// </summary>
+        private void OnVideoPanel_MouseClick(object? sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left)
+            {
+                Selected?.Invoke(this);
+                Debug.WriteLine($"MultiViewPlayer {Index}: 被點擊選中 (視頻區域)");
+            }
+        }
+
+        /// <summary>
+        /// 視頻面板滑鼠雙擊事件 - 新增
+        /// </summary>
+        private void OnVideoPanel_MouseDoubleClick(object? sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left)
+            {
+                DoubleClicked?.Invoke(this);
+                Debug.WriteLine($"MultiViewPlayer {Index}: 被雙擊 (視頻區域)");
+            }
+        }
+
+        /// <summary>
         /// 更新視頻面板的位置和大小 - 修正版本
         /// </summary>
         private void UpdateVideoPanelBounds()
@@ -292,30 +406,6 @@ namespace SentryX
             catch (Exception ex)
             {
                 Debug.WriteLine($"MultiViewPlayer {Index}: 更新視頻面板位置時發生異常 - {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// 容器面板滑鼠點擊事件
-        /// </summary>
-        private void OnContainer_MouseClick(object? sender, MouseEventArgs e)
-        {
-            if (e.Button == MouseButtons.Left)
-            {
-                Selected?.Invoke(this);
-                Debug.WriteLine($"MultiViewPlayer {Index}: 被點擊選中 (容器)");
-            }
-        }
-
-        /// <summary>
-        /// 視頻面板滑鼠點擊事件
-        /// </summary>
-        private void OnVideoPanel_MouseClick(object? sender, MouseEventArgs e)
-        {
-            if (e.Button == MouseButtons.Left)
-            {
-                Selected?.Invoke(this);
-                Debug.WriteLine($"MultiViewPlayer {Index}: 被點擊選中 (視頻區域)");
             }
         }
 
@@ -347,7 +437,7 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 完全重置顯示狀態 - 新增強化版本
+        /// 完全重置顯示狀態 - 強化版本
         /// </summary>
         private void CompletelyResetDisplayState()
         {
@@ -446,18 +536,20 @@ namespace SentryX
         {
             if (!_disposed)
             {
-                StopPlay();
+                StopPlay(); // 完全停止，清除播放狀態
 
                 // 移除事件處理器
                 if (_containerPanel != null)
                 {
                     _containerPanel.MouseClick -= OnContainer_MouseClick;
+                    _containerPanel.MouseDoubleClick -= OnContainer_MouseDoubleClick;
                     _containerPanel.Resize -= OnContainer_Resize;
                 }
 
                 if (_videoPanel != null)
                 {
                     _videoPanel.MouseClick -= OnVideoPanel_MouseClick;
+                    _videoPanel.MouseDoubleClick -= OnVideoPanel_MouseDoubleClick;
                 }
 
                 _videoPanel?.Dispose();

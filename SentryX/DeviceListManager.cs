@@ -7,8 +7,10 @@ namespace SentryX
     {
         private readonly MainWindow _mainWindow;
         private string? _selectedDeviceId = null;
+        private bool _isDeviceSelected = false; // 新增：標記是否選中的是設備本身
 
         public string? SelectedDeviceId => _selectedDeviceId;
+        public bool IsDeviceSelected => _isDeviceSelected; // 新增：是否選中設備（而非通道）
 
         public DeviceListManager(MainWindow mainWindow)
         {
@@ -41,7 +43,9 @@ namespace SentryX
                         _mainWindow.DeviceListBox.Items.Add($"在線設備 ({onlineDevices.Count})");
                         foreach (var device in onlineDevices)
                         {
-                            _mainWindow.DeviceListBox.Items.Add($"📹 {device.Name} ({device.IpAddress})");
+                            // 根據通道數量判斷設備類型並顯示適當的圖標
+                            string deviceIcon = GetDeviceIcon(device.ChannelCount);
+                            _mainWindow.DeviceListBox.Items.Add($"{deviceIcon} {device.Name} ({device.IpAddress})");
 
                             if (device.ChannelCount > 0)
                             {
@@ -63,7 +67,8 @@ namespace SentryX
                         _mainWindow.DeviceListBox.Items.Add($"離線設備 ({offlineDevices.Count})");
                         foreach (var device in offlineDevices)
                         {
-                            _mainWindow.DeviceListBox.Items.Add($"📹 {device.Name} ({device.IpAddress}) - 離線");
+                            string deviceIcon = GetDeviceIcon(device.ChannelCount);
+                            _mainWindow.DeviceListBox.Items.Add($"{deviceIcon} {device.Name} ({device.IpAddress}) - 離線");
                         }
                     }
                 }
@@ -74,19 +79,38 @@ namespace SentryX
             }
         }
 
+        /// <summary>
+        /// 根據通道數量返回適當的設備圖標
+        /// </summary>
+        private string GetDeviceIcon(int channelCount)
+        {
+            return channelCount switch
+            {
+                <= 1 => "📹", // 單路攝影機
+                <= 4 => "🔲", // 4路 DVR/NVR
+                <= 8 => "🔳", // 8路 DVR/NVR
+                <= 16 => "📺", // 16路 DVR/NVR
+                _ => "🏢" // 大型 NVR 系統
+            };
+        }
+
         public void HandleDeviceSelection(string selectedText)
         {
             DeviceInfo? selectedDevice = null;
             int selectedChannel = 0;
+            _isDeviceSelected = false;
 
             if (selectedText.Contains("通道"))
             {
+                // 選中的是通道
                 selectedChannel = ExtractChannelFromSelection();
 
                 int selectedIndex = _mainWindow.DeviceListBox.SelectedIndex;
                 for (int i = selectedIndex - 1; i >= 0; i--)
                 {
-                    if (_mainWindow.DeviceListBox.Items[i] is string itemText && itemText.Contains("📹"))
+                    if (_mainWindow.DeviceListBox.Items[i] is string itemText && 
+                        (itemText.Contains("📹") || itemText.Contains("🔲") || 
+                         itemText.Contains("🔳") || itemText.Contains("📺") || itemText.Contains("🏢")))
                     {
                         var devices = DahuaSDK.GetAllDevices();
                         selectedDevice = devices.FirstOrDefault(d =>
@@ -94,23 +118,41 @@ namespace SentryX
                         break;
                     }
                 }
+                _isDeviceSelected = false;
             }
-            else if (selectedText.Contains("📹"))
+            else if (selectedText.Contains("📹") || selectedText.Contains("🔲") || 
+                     selectedText.Contains("🔳") || selectedText.Contains("📺") || selectedText.Contains("🏢"))
             {
+                // 選中的是設備本身
                 var devices = DahuaSDK.GetAllDevices();
                 selectedDevice = devices.FirstOrDefault(d =>
                     selectedText.Contains(d.Name) && selectedText.Contains(d.IpAddress));
-                selectedChannel = 0;
+                selectedChannel = -1; // -1 表示選中整個設備
+                _isDeviceSelected = true;
             }
 
             if (selectedDevice != null)
             {
                 _selectedDeviceId = selectedDevice.Id;
-                _mainWindow.ShowMessage($"已選中: {selectedDevice.Name} 通道{selectedChannel + 1}");
+
+                if (_isDeviceSelected && selectedDevice.ChannelCount > 1)
+                {
+                    _mainWindow.ShowMessage($"已選中設備: {selectedDevice.Name} (共 {selectedDevice.ChannelCount} 個通道)");
+                    _mainWindow.ShowMessage($"💡 點擊「開始播放」將自動播放所有通道到可用的分割區域");
+                }
+                else if (_isDeviceSelected)
+                {
+                    _mainWindow.ShowMessage($"已選中設備: {selectedDevice.Name} (單通道設備)");
+                }
+                else
+                {
+                    _mainWindow.ShowMessage($"已選中: {selectedDevice.Name} 通道{selectedChannel + 1}");
+                }
             }
             else
             {
                 _selectedDeviceId = null;
+                _isDeviceSelected = false;
             }
         }
 

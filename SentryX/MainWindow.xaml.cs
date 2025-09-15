@@ -199,7 +199,6 @@ namespace SentryX
         {
             if (_deviceListManager == null || _playbackManager == null) return;
 
-            int channel = _deviceListManager.ExtractChannelFromSelection();
             var deviceId = _deviceListManager.SelectedDeviceId;
             if (string.IsNullOrEmpty(deviceId))
             {
@@ -209,7 +208,31 @@ namespace SentryX
                 return;
             }
 
-            bool success = _playbackManager.StartVideoPlayback(deviceId, channel);
+            bool success;
+
+            if (_deviceListManager.IsDeviceSelected)
+            {
+                // 選中的是設備本身，使用多通道播放
+                var device = DahuaSDK.GetDevice(deviceId);
+                if (device != null && device.ChannelCount > 1)
+                {
+                    ShowMessage($"🎬 開始 DVR/NVR 多通道播放模式...");
+                    int successCount = _playbackManager.StartMultiChannelPlayback(deviceId);
+                    success = successCount > 0;
+                }
+                else
+                {
+                    // 單通道設備，使用普通播放
+                    int channel = 0;
+                    success = _playbackManager.StartVideoPlayback(deviceId, channel);
+                }
+            }
+            else
+            {
+                // 選中的是具體通道，使用單通道播放
+                int channel = _deviceListManager.ExtractChannelFromSelection();
+                success = _playbackManager.StartVideoPlayback(deviceId, channel);
+            }
 
             if (StartVideoButton != null) StartVideoButton.IsEnabled = true;
             if (StopVideoButton != null) StopVideoButton.IsEnabled = success;
@@ -251,6 +274,7 @@ namespace SentryX
         {
             if (_uiManager?.IsUIInitialized != true) return;
 
+            // 修復錯誤：將錯誤的賦值語法改為正確的比較語法
             if (StartVideoButton?.IsEnabled == true && _splitScreenManager?.SelectedPlayer != null)
             {
                 StartVideoButton_Click(sender, new RoutedEventArgs());

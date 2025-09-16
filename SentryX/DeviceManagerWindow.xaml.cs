@@ -22,15 +22,20 @@ namespace SentryX
         private DeviceInfo? _selectedDevice = null;
         private SearchedDeviceInfo? _selectedSearchResult = null;
 
-        // ✅ 自動刷新計時器
+        // 自動刷新計時器
         private readonly DispatcherTimer _autoRefreshTimer;
 
-        // ✅ 搜尋相關變數
+        // 搜尋相關變數
         private readonly List<string> _localIPList = new();
         private readonly List<IntPtr> _searchIDList = new();
         private readonly fSearchDevicesCBEx _searchDevicesCBEx;
         private int _deviceSearchCount = 0;
         private bool _isSearching = false;
+
+        // IP 範圍搜尋相關變數
+        private List<string> _customIPList = new();
+        private bool _isIPRangeSearch = false;
+        private string _currentSearchMode = "自動偵測模式";
 
         /// <summary>
         /// 設備管理視窗建構子
@@ -39,14 +44,14 @@ namespace SentryX
         {
             InitializeComponent();
 
-            // ✅ 初始化搜尋回調
+            // 初始化搜尋回調
             _searchDevicesCBEx = new fSearchDevicesCBEx(SearchDevicesCBEx);
 
             InitializeUI();
             SubscribeToEvents();
             LoadExistingDevices();
 
-            // ✅ 初始化自動刷新計時器
+            // 初始化自動刷新計時器
             _autoRefreshTimer = new DispatcherTimer
             {
                 Interval = TimeSpan.FromSeconds(2) // 每2秒刷新一次
@@ -54,7 +59,7 @@ namespace SentryX
             _autoRefreshTimer.Tick += AutoRefreshTimer_Tick;
             _autoRefreshTimer.Start();
 
-            AddStatusMessage("🔄 自動刷新功能已啟動（每2秒更新）");
+            AddStatusMessage("自動刷新功能已啟動（每2秒更新）");
         }
 
         /// <summary>
@@ -75,6 +80,11 @@ namespace SentryX
             RemoveDeviceButton.IsEnabled = false;
             LogoutDeviceButton.IsEnabled = false;
             FillFromSearchButton.IsEnabled = false;
+
+            // 初始化新的 UI 元素
+            SearchIPRangeButton.IsEnabled = false;
+            UpdateSearchModeDisplay();
+            UpdateDeviceCountDisplay();
         }
 
         /// <summary>
@@ -101,7 +111,9 @@ namespace SentryX
             AddStatusMessage($"載入了 {devices.Count} 個設備");
         }
 
-        // 修正 CS8622：將 AutoRefreshTimer_Tick 的 sender 參數標記為非 nullable
+        /// <summary>
+        /// 自動刷新計時器事件
+        /// </summary>
         private void AutoRefreshTimer_Tick(object? sender, EventArgs e)
         {
             // 自動刷新 DataGrid 顯示
@@ -111,19 +123,175 @@ namespace SentryX
             UpdateButtonStates();
         }
 
-        // === ✅ 新增：設備搜尋相關方法 ===
+        // === IP 範圍搜尋相關方法 ===
 
         /// <summary>
-        /// 搜尋設備按鈕點擊
+        /// 設定 IP 範圍按鈕點擊
+        /// </summary>
+        private void SetIPRangeButton_Click(object sender, RoutedEventArgs e)
+        {
+            var dialog = new IPRangeDialog();
+            dialog.Owner = this;
+
+            if (dialog.ShowDialog() == true)
+            {
+                _customIPList = dialog.IPList;
+                SearchIPRangeButton.IsEnabled = _customIPList.Count > 0;
+
+                // 更新狀態顯示
+                IPRangeStatusText.Text = $"已設定範圍：{_customIPList.Count} 個 IP 地址";
+                AddStatusMessage($"IP 範圍設定完成：包含 {_customIPList.Count} 個 IP 地址");
+
+                // 顯示範圍預覽（只顯示前幾個和最後幾個）
+                if (_customIPList.Count > 0)
+                {
+                    string preview = "";
+                    if (_customIPList.Count <= 5)
+                    {
+                        preview = string.Join(", ", _customIPList);
+                    }
+                    else
+                    {
+                        preview = $"{_customIPList[0]}, {_customIPList[1]}, ... , {_customIPList[_customIPList.Count - 2]}, {_customIPList[_customIPList.Count - 1]}";
+                    }
+                    AddStatusMessage($"IP 範圍預覽：{preview}");
+                }
+            }
+        }
+
+        /// <summary>
+        /// IP 範圍搜尋按鈕點擊
+        /// </summary>
+        private void SearchIPRangeButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (_isSearching)
+            {
+                AddStatusMessage("搜尋正在進行中，請等待完成或點擊停止");
+                return;
+            }
+
+            if (_customIPList.Count == 0)
+            {
+                AddStatusMessage("請先設定 IP 搜尋範圍");
+                return;
+            }
+
+            _isIPRangeSearch = true;
+            _currentSearchMode = "IP 範圍模式";
+            StartDeviceSearchWithCustomIPs();
+        }
+
+        /// <summary>
+        /// 使用自訂 IP 清單開始搜尋
+        /// </summary>
+        private void StartDeviceSearchWithCustomIPs()
+        {
+            try
+            {
+                _isSearching = true;
+                SearchDevicesButton.IsEnabled = false;
+                SearchIPRangeButton.IsEnabled = false;
+                StopSearchButton.IsEnabled = true;
+                SearchStatusText.Text = "正在範圍搜尋...";
+                UpdateSearchModeDisplay();
+
+                _searchResultCollection.Clear();
+                _deviceSearchCount = 0;
+                UpdateDeviceCountDisplay();
+
+                AddStatusMessage($"開始在指定 IP 範圍內搜尋設備（共 {_customIPList.Count} 個地址）...");
+
+                Task.Run(() =>
+                {
+                    try
+                    {
+                        // 針對每個自訂 IP 開始搜尋
+                        foreach (var localIP in _customIPList)
+                        {
+                            if (!_isSearching) break;
+
+                            var stuIn = new NET_IN_STARTSERACH_DEVICE
+                            {
+                                dwSize = (uint)Marshal.SizeOf(typeof(NET_IN_STARTSERACH_DEVICE)),
+                                emSendType = EM_SEND_SEARCH_TYPE.MULTICAST_AND_BROADCAST,
+                                cbSearchDevices = _searchDevicesCBEx,
+                                szLocalIp = localIP
+                            };
+
+                            var stuOut = new NET_OUT_STARTSERACH_DEVICE
+                            {
+                                dwSize = (uint)Marshal.SizeOf(typeof(NET_OUT_STARTSERACH_DEVICE))
+                            };
+
+                            IntPtr searchID = NETClient.StartSearchDevicesEx(ref stuIn, ref stuOut);
+                            if (searchID != IntPtr.Zero)
+                            {
+                                lock (_searchIDList)
+                                {
+                                    _searchIDList.Add(searchID);
+                                }
+                            }
+
+                            // 每個 IP 間隔一點時間
+                            System.Threading.Thread.Sleep(50);
+                        }
+
+                        // 搜尋15秒後自動停止（範圍搜尋時間稍長）
+                        System.Threading.Thread.Sleep(15000);
+
+                        if (_isSearching)
+                        {
+                            Dispatcher.Invoke(() => StopDeviceSearch());
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Dispatcher.Invoke(() =>
+                        {
+                            AddStatusMessage($"範圍搜尋過程中發生錯誤: {ex.Message}");
+                            StopDeviceSearch();
+                        });
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                AddStatusMessage($"啟動範圍搜尋時發生錯誤: {ex.Message}");
+                StopDeviceSearch();
+            }
+        }
+
+        /// <summary>
+        /// 更新搜尋模式顯示
+        /// </summary>
+        private void UpdateSearchModeDisplay()
+        {
+            SearchModeText.Text = _currentSearchMode;
+        }
+
+        /// <summary>
+        /// 更新設備數量顯示
+        /// </summary>
+        private void UpdateDeviceCountDisplay()
+        {
+            DeviceCountText.Text = _deviceSearchCount.ToString();
+        }
+
+        // === 設備搜尋相關方法 ===
+
+        /// <summary>
+        /// 搜尋設備按鈕點擊（自動偵測模式）
         /// </summary>
         private void SearchDevicesButton_Click(object sender, RoutedEventArgs e)
         {
             if (_isSearching)
             {
-                AddStatusMessage("⚠️ 搜尋正在進行中，請等待完成或點擊停止");
+                AddStatusMessage("搜尋正在進行中，請等待完成或點擊停止");
                 return;
             }
 
+            _isIPRangeSearch = false;
+            _currentSearchMode = "自動偵測模式";
             StartDeviceSearch();
         }
 
@@ -169,7 +337,7 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 開始設備搜尋 - ✅ 修正跨執行緒問題
+        /// 開始設備搜尋（自動偵測網卡模式）
         /// </summary>
         private void StartDeviceSearch()
         {
@@ -177,13 +345,16 @@ namespace SentryX
             {
                 _isSearching = true;
                 SearchDevicesButton.IsEnabled = false;
+                SearchIPRangeButton.IsEnabled = false;
                 StopSearchButton.IsEnabled = true;
                 SearchStatusText.Text = "正在搜尋...";
+                UpdateSearchModeDisplay();
 
                 _searchResultCollection.Clear();
                 _deviceSearchCount = 0;
+                UpdateDeviceCountDisplay();
 
-                AddStatusMessage("🔍 開始搜尋網路設備...");
+                AddStatusMessage("開始搜尋網路設備...");
 
                 Task.Run(() =>
                 {
@@ -192,10 +363,9 @@ namespace SentryX
                         // 取得所有網路介面
                         GetAllNetworkInterface();
 
-                        // ✅ 使用 Dispatcher.Invoke 安全更新 UI
                         Dispatcher.Invoke(() =>
                         {
-                            if (_isSearching) // 再次檢查是否仍在搜尋狀態
+                            if (_isSearching)
                             {
                                 SearchStatusText.Text = $"找到 {_localIPList.Count} 個網路介面，開始搜尋...";
                             }
@@ -222,7 +392,7 @@ namespace SentryX
                             IntPtr searchID = NETClient.StartSearchDevicesEx(ref stuIn, ref stuOut);
                             if (searchID != IntPtr.Zero)
                             {
-                                lock (_searchIDList) // ✅ 加入執行緒同步
+                                lock (_searchIDList)
                                 {
                                     _searchIDList.Add(searchID);
                                 }
@@ -241,7 +411,7 @@ namespace SentryX
                     {
                         Dispatcher.Invoke(() =>
                         {
-                            AddStatusMessage($"❌ 搜尋過程中發生錯誤: {ex.Message}");
+                            AddStatusMessage($"搜尋過程中發生錯誤: {ex.Message}");
                             StopDeviceSearch();
                         });
                     }
@@ -249,13 +419,13 @@ namespace SentryX
             }
             catch (Exception ex)
             {
-                AddStatusMessage($"❌ 啟動搜尋時發生錯誤: {ex.Message}");
+                AddStatusMessage($"啟動搜尋時發生錯誤: {ex.Message}");
                 StopDeviceSearch();
             }
         }
 
         /// <summary>
-        /// 停止設備搜尋 - ✅ 修正跨執行緒問題
+        /// 停止設備搜尋
         /// </summary>
         private void StopDeviceSearch()
         {
@@ -263,15 +433,15 @@ namespace SentryX
             {
                 _isSearching = false;
                 SearchDevicesButton.IsEnabled = true;
+                SearchIPRangeButton.IsEnabled = _customIPList.Count > 0;
                 StopSearchButton.IsEnabled = false;
 
-                // ✅ 在背景執行緒中停止搜尋，避免阻塞 UI
                 Task.Run(() =>
                 {
                     try
                     {
                         // 停止所有搜尋
-                        lock (_searchIDList) // ✅ 加入執行緒同步
+                        lock (_searchIDList)
                         {
                             foreach (var searchID in _searchIDList)
                             {
@@ -283,30 +453,35 @@ namespace SentryX
                             _searchIDList.Clear();
                         }
 
-                        // ✅ 使用 Dispatcher.Invoke 安全更新 UI
                         Dispatcher.Invoke(() =>
                         {
-                            SearchStatusText.Text = $"搜尋完成，找到 {_deviceSearchCount} 個設備";
-                            AddStatusMessage($"🔍 設備搜尋完成，找到 {_deviceSearchCount} 個設備");
+                            string searchModeText = _isIPRangeSearch ? "範圍搜尋" : "自動搜尋";
+                            SearchStatusText.Text = $"{searchModeText}完成，找到 {_deviceSearchCount} 個設備";
+                            AddStatusMessage($"{searchModeText}完成，找到 {_deviceSearchCount} 個設備");
+
+                            // 重置搜尋模式
+                            _isIPRangeSearch = false;
+                            _currentSearchMode = "自動偵測模式";
+                            UpdateSearchModeDisplay();
                         });
                     }
                     catch (Exception ex)
                     {
                         Dispatcher.Invoke(() =>
                         {
-                            AddStatusMessage($"❌ 停止搜尋時發生錯誤: {ex.Message}");
+                            AddStatusMessage($"停止搜尋時發生錯誤: {ex.Message}");
                         });
                     }
                 });
             }
             catch (Exception ex)
             {
-                AddStatusMessage($"❌ 停止搜尋時發生錯誤: {ex.Message}");
+                AddStatusMessage($"停止搜尋時發生錯誤: {ex.Message}");
             }
         }
 
         /// <summary>
-        /// 搜尋回調函數 - ✅ 修正跨執行緒問題
+        /// 搜尋回調函數
         /// </summary>
         private void SearchDevicesCBEx(IntPtr lSearchHandle, IntPtr pDevNetInfo, IntPtr dwUser)
         {
@@ -314,26 +489,23 @@ namespace SentryX
             {
                 if (!_isSearching || pDevNetInfo == IntPtr.Zero)
                 {
-                    return; // 提早退出，避免不必要的處理
+                    return;
                 }
 
                 var info = Marshal.PtrToStructure<NET_DEVICE_NET_INFO_EX2>(pDevNetInfo);
-
-                // ✅ 使用 BeginInvoke 進行非阻塞式 UI 更新
                 Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action<NET_DEVICE_NET_INFO_EX2>(UpdateSearchUI), info);
             }
             catch (Exception ex)
             {
-                // ✅ 錯誤處理也要使用 Dispatcher
                 Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
                 {
-                    AddStatusMessage($"❌ 搜尋回調錯誤: {ex.Message}");
+                    AddStatusMessage($"搜尋回調錯誤: {ex.Message}");
                 }));
             }
         }
 
         /// <summary>
-        /// 更新搜尋 UI - ✅ 確保在 UI 執行緒中執行
+        /// 更新搜尋 UI
         /// </summary>
         private void UpdateSearchUI(NET_DEVICE_NET_INFO_EX2 info)
         {
@@ -341,14 +513,14 @@ namespace SentryX
             {
                 if (!_isSearching)
                 {
-                    return; // 如果已經停止搜尋，不再更新 UI
+                    return;
                 }
 
                 // 檢查是否已經存在相同 MAC 的設備
                 var existingDevice = _searchResultCollection.FirstOrDefault(d => d.MAC == info.stuDevInfo.szMac);
                 if (existingDevice != null)
                 {
-                    return; // 避免重複
+                    return;
                 }
 
                 _deviceSearchCount++;
@@ -371,17 +543,21 @@ namespace SentryX
 
                 _searchResultCollection.Add(searchedDevice);
 
-                // ✅ 這些 UI 更新現在是安全的，因為我們在 UI 執行緒中
                 if (_isSearching && SearchStatusText != null)
                 {
-                    SearchStatusText.Text = $"已找到 {_deviceSearchCount} 個設備...";
+                    string modeText = _isIPRangeSearch ? "範圍搜尋" : "自動搜尋";
+                    SearchStatusText.Text = $"{modeText}中，已找到 {_deviceSearchCount} 個設備...";
                 }
 
-                AddStatusMessage($"🔍 發現設備: {searchedDevice.IP} ({searchedDevice.DeviceType}) - {searchedDevice.InitStatusDisplay}");
+                // 更新設備數量顯示
+                UpdateDeviceCountDisplay();
+
+                string searchType = _isIPRangeSearch ? "範圍搜尋" : "自動偵測";
+                AddStatusMessage($"[{searchType}] 發現設備: {searchedDevice.IP} ({searchedDevice.DeviceType}) - {searchedDevice.InitStatusDisplay}");
             }
             catch (Exception ex)
             {
-                AddStatusMessage($"❌ 更新搜尋 UI 錯誤: {ex.Message}");
+                AddStatusMessage($"更新搜尋 UI 錯誤: {ex.Message}");
             }
         }
 
@@ -398,7 +574,7 @@ namespace SentryX
             UsernameTextBox.Text = "admin";
             PasswordBox.Password = "123456";
 
-            AddStatusMessage($"✅ 已從搜尋結果填入設備資訊: {_selectedSearchResult.IP}");
+            AddStatusMessage($"已從搜尋結果填入設備資訊: {_selectedSearchResult.IP}");
             DeviceNameTextBox.Focus();
         }
 
@@ -433,17 +609,16 @@ namespace SentryX
                     }
                 }
 
-                // ✅ 這個訊息會在背景執行緒中顯示，需要使用 Dispatcher
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
-                    AddStatusMessage($"🌐 找到 {_localIPList.Count} 個本地網路介面");
+                    AddStatusMessage($"找到 {_localIPList.Count} 個本地網路介面");
                 }));
             }
             catch (Exception ex)
             {
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
-                    AddStatusMessage($"❌ 取得網路介面失敗: {ex.Message}");
+                    AddStatusMessage($"取得網路介面失敗: {ex.Message}");
                 }));
             }
         }
@@ -467,7 +642,7 @@ namespace SentryX
         {
             if (_selectedDevice == null)
             {
-                AddStatusMessage("❌ 請先選擇要編輯的設備");
+                AddStatusMessage("請先選擇要編輯的設備");
                 return;
             }
 
@@ -482,7 +657,7 @@ namespace SentryX
         {
             if (_selectedDevice == null)
             {
-                AddStatusMessage("❌ 請先選擇要移除的設備");
+                AddStatusMessage("請先選擇要移除的設備");
                 return;
             }
 
@@ -507,28 +682,28 @@ namespace SentryX
         }
 
         /// <summary>
-        /// ✅ 登出設備按鈕點擊（原本的斷開功能）
+        /// 登出設備按鈕點擊（原本的斷開功能）
         /// </summary>
         private void LogoutDeviceButton_Click(object sender, RoutedEventArgs e)
         {
             if (_selectedDevice == null)
             {
-                AddStatusMessage("❌ 請先選擇要登出的設備");
+                AddStatusMessage("請先選擇要登出的設備");
                 return;
             }
 
             if (!_selectedDevice.IsOnline)
             {
-                AddStatusMessage("⚠️ 設備已經是離線狀態");
+                AddStatusMessage("設備已經是離線狀態");
                 return;
             }
 
-            AddStatusMessage($"📤 正在登出設備: {_selectedDevice.Name}...");
+            AddStatusMessage($"正在登出設備: {_selectedDevice.Name}...");
             DahuaSDK.DisconnectDevice(_selectedDevice.Id);
         }
 
         /// <summary>
-        /// ✅ 儲存並自動連接設備
+        /// 儲存並自動連接設備
         /// </summary>
         private void SaveDeviceButton_Click(object sender, RoutedEventArgs e)
         {
@@ -564,7 +739,7 @@ namespace SentryX
                     _selectedDevice.Username = deviceInfo.Username;
                     _selectedDevice.Password = deviceInfo.Password;
 
-                    AddStatusMessage($"✅ 設備 {deviceInfo.Name} 資訊已更新");
+                    AddStatusMessage($"設備 {deviceInfo.Name} 資訊已更新");
                     isNewDevice = false;
                     deviceInfo = _selectedDevice; // 使用現有設備對象
                 }
@@ -577,17 +752,17 @@ namespace SentryX
                     }
 
                     _deviceCollection.Add(deviceInfo);
-                    AddStatusMessage($"✅ 新設備 {deviceInfo.Name} 已添加");
+                    AddStatusMessage($"新設備 {deviceInfo.Name} 已添加");
                 }
 
-                // ✅ 自動嘗試連接設備
-                AddStatusMessage($"🔄 正在自動連接設備 {deviceInfo.Name}...");
+                // 自動嘗試連接設備
+                AddStatusMessage($"正在自動連接設備 {deviceInfo.Name}...");
 
                 bool connectResult = DahuaSDK.ConnectDevice(deviceInfo.Id);
 
                 if (connectResult)
                 {
-                    AddStatusMessage($"🎉 設備 {deviceInfo.Name} 儲存並連接成功！");
+                    AddStatusMessage($"設備 {deviceInfo.Name} 儲存並連接成功！");
 
                     // 連接成功後清空輸入欄位，準備下一個設備
                     if (isNewDevice)
@@ -597,12 +772,12 @@ namespace SentryX
                 }
                 else
                 {
-                    AddStatusMessage($"⚠️ 設備 {deviceInfo.Name} 已儲存，但連接失敗，請檢查網路和設備狀態");
+                    AddStatusMessage($"設備 {deviceInfo.Name} 已儲存，但連接失敗，請檢查網路和設備狀態");
                 }
             }
             catch (Exception ex)
             {
-                AddStatusMessage($"❌ 儲存設備時發生錯誤: {ex.Message}");
+                AddStatusMessage($"儲存設備時發生錯誤: {ex.Message}");
                 MessageBox.Show($"儲存設備時發生錯誤：\n{ex.Message}",
                                "錯誤", MessageBoxButton.OK, MessageBoxImage.Error);
             }
@@ -732,26 +907,26 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 視窗關閉事件 - ✅ 修正跨執行緒問題
+        /// 視窗關閉事件
         /// </summary>
         protected override void OnClosed(EventArgs e)
         {
             try
             {
-                // ✅ 停止設備搜尋
+                // 停止設備搜尋
                 if (_isSearching)
                 {
                     StopDeviceSearch();
                 }
 
-                // ✅ 停止自動刷新計時器
+                // 停止自動刷新計時器
                 _autoRefreshTimer?.Stop();
 
                 // 取消事件訂閱
                 DahuaSDK.DeviceStatusChanged -= OnDeviceStatusChanged;
                 DahuaSDK.StatusMessage -= OnStatusMessage;
 
-                AddStatusMessage("🔄 自動刷新功能已停止");
+                AddStatusMessage("自動刷新功能已停止");
             }
             catch (Exception ex)
             {

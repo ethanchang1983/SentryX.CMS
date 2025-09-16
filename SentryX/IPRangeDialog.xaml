@@ -1,0 +1,49 @@
+﻿<!-- IPRangeDialog.xaml - WPF版本的IP範圍設定對話框 -->
+<Window x:Class="SentryX.IPRangeDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="設定 IP 搜尋範圍" 
+        Height="300" Width="400"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize">
+
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- 標題說明 -->
+        <TextBlock Grid.Row="0" Text="請設定要搜尋的 IP 地址範圍："
+                   FontWeight="Bold" Margin="0,0,0,15"/>
+
+        <!-- 起始 IP -->
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,5">
+            <TextBlock Text="起始 IP：" Width="70" VerticalAlignment="Center"/>
+            <TextBox Name="StartIPTextBox" Width="150" Text="192.168.1.1"/>
+        </StackPanel>
+
+        <!-- 結束 IP -->
+        <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,5">
+            <TextBlock Text="結束 IP：" Width="70" VerticalAlignment="Center"/>
+            <TextBox Name="EndIPTextBox" Width="150" Text="192.168.1.254"/>
+        </StackPanel>
+
+        <!-- 說明文字 -->
+        <TextBlock Grid.Row="3" Text="注意：IP 範圍不能超過 256 個地址"
+                   Foreground="Gray" FontSize="11" Margin="0,10,0,0"/>
+
+        <!-- 按鈕區 -->
+        <StackPanel Grid.Row="5" Orientation="Horizontal" 
+                    HorizontalAlignment="Right" Margin="0,15,0,0">
+            <Button Name="OKButton" Content="確定" Width="70" Height="30"
+                    Margin="0,0,10,0" IsDefault="True" Click="OKButton_Click"/>
+            <Button Name="CancelButton" Content="取消" Width="70" Height="30"
+                    IsCancel="True" Click="CancelButton_Click"/>
+        </StackPanel>
+    </Grid>
+</Window>

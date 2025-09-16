@@ -1,4 +1,4 @@
-﻿<!-- DeviceManagerWindow.xaml - 加入設備搜尋功能 -->
+﻿<!-- DeviceManagerWindow.xaml - 加入 IP 範圍搜尋功能 -->
 <Window x:Class="SentryX.DeviceManagerWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -21,7 +21,7 @@
             <!-- 狀態區 -->
         </Grid.RowDefinitions>
 
-        <!-- ✅ 簡化後的工具列 -->
+        <!-- 簡化後的工具列 -->
         <StackPanel Grid.Row="0" Orientation="Horizontal" Background="LightGray" Margin="5">
             <Button Name="AddDeviceButton" Content="➕ 添加設備" Click="AddDeviceButton_Click"
                     ToolTip="清空輸入欄位，準備添加新設備"/>
@@ -59,30 +59,68 @@
             </DataGrid.Columns>
         </DataGrid>
 
-        <!-- ✅ 新增：設備搜尋區 -->
+        <!-- 新增：設備搜尋區 -->
         <GroupBox Grid.Row="2" Header="網路設備搜尋" Margin="5">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
 
-                <!-- 搜尋控制 -->
+                <!-- 搜尋控制 - 第一行：自動偵測搜尋 -->
                 <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="5">
-                    <Button Name="SearchDevicesButton" Content="🔍 搜尋設備" 
-                            Click="SearchDevicesButton_Click" Padding="10,5"
-                            Background="LightBlue" FontWeight="Bold"
-                            ToolTip="搜尋網路中的大華設備"/>
-                    <Button Name="StopSearchButton" Content="⏹️ 停止搜尋" 
-                            Click="StopSearchButton_Click" Margin="10,0,0,0"
-                            IsEnabled="False" ToolTip="停止設備搜尋"/>
-                    <TextBlock Name="SearchStatusText" Text="準備搜尋..." 
-                               VerticalAlignment="Center" Margin="20,0,0,0"
-                               Foreground="Blue" FontWeight="Bold"/>
+                    <GroupBox Header="自動偵測搜尋" Padding="10,5">
+                        <StackPanel Orientation="Horizontal">
+                            <Button Name="SearchDevicesButton" Content="🔍 搜尋設備" 
+                                    Click="SearchDevicesButton_Click" Padding="10,5"
+                                    Background="LightBlue" FontWeight="Bold"
+                                    ToolTip="自動偵測網卡並搜尋網路中的大華設備"/>
+                            <Button Name="StopSearchButton" Content="⏹️ 停止搜尋" 
+                                    Click="StopSearchButton_Click" Margin="10,0,0,0"
+                                    IsEnabled="False" ToolTip="停止設備搜尋"/>
+                        </StackPanel>
+                    </GroupBox>
+
+                    <Separator Width="20"/>
+
+                    <!-- 新增：IP範圍搜尋 -->
+                    <GroupBox Header="IP 範圍搜尋" Padding="10,5">
+                        <StackPanel Orientation="Horizontal">
+                            <Button Name="SetIPRangeButton" Content="⚙️ 設定範圍" 
+                                    Click="SetIPRangeButton_Click" Padding="10,5"
+                                    Background="LightYellow" FontWeight="Bold"
+                                    ToolTip="設定 IP 範圍並搜尋指定網段的設備"/>
+                            <Button Name="SearchIPRangeButton" Content="🎯 範圍搜尋" 
+                                    Click="SearchIPRangeButton_Click" Margin="10,0,0,0" Padding="10,5"
+                                    Background="LightGreen" FontWeight="Bold"
+                                    IsEnabled="False" ToolTip="在指定 IP 範圍內搜尋設備"/>
+                        </StackPanel>
+                    </GroupBox>
+
+                    <Separator Width="20"/>
+
+                    <!-- 搜尋狀態顯示 -->
+                    <StackPanel Orientation="Vertical" VerticalAlignment="Center">
+                        <TextBlock Name="SearchStatusText" Text="準備搜尋..." 
+                                   Foreground="Blue" FontWeight="Bold"/>
+                        <TextBlock Name="IPRangeStatusText" Text="未設定 IP 範圍" 
+                                   FontSize="10" Foreground="Gray"/>
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- 搜尋進度和資訊 -->
+                <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="5,0,5,5">
+                    <TextBlock Text="搜尋模式：" VerticalAlignment="Center" FontWeight="Bold"/>
+                    <TextBlock Name="SearchModeText" Text="自動偵測模式" VerticalAlignment="Center" 
+                               Foreground="Blue" Margin="5,0,20,0"/>
+                    <TextBlock Text="找到設備：" VerticalAlignment="Center" FontWeight="Bold"/>
+                    <TextBlock Name="DeviceCountText" Text="0" VerticalAlignment="Center" 
+                               Foreground="Red" FontWeight="Bold" Margin="5,0"/>
                 </StackPanel>
 
                 <!-- 搜尋結果清單 -->
-                <DataGrid Grid.Row="1" Name="SearchResultDataGrid" 
+                <DataGrid Grid.Row="2" Name="SearchResultDataGrid" 
                           AutoGenerateColumns="False"
                           SelectionMode="Single"
                           CanUserAddRows="False"
@@ -130,13 +168,13 @@
                     <TextBlock Text="密碼:" Width="60" VerticalAlignment="Center" Margin="20,0,0,0"/>
                     <PasswordBox Name="PasswordBox" Password="123456" Width="120" Margin="5,0"/>
 
-                    <!-- ✅ 改成儲存並連接 -->
+                    <!-- 改成儲存並連接 -->
                     <Button Name="SaveDeviceButton" Content="💾 儲存並連接" 
                             Click="SaveDeviceButton_Click" Margin="30,0,0,0" Padding="15,5"
                             Background="LightGreen" FontWeight="Bold"
                             ToolTip="儲存設備資訊並立即嘗試連接"/>
-                    
-                    <!-- ✅ 新增：從搜尋結果填入 -->
+
+                    <!-- 新增：從搜尋結果填入 -->
                     <Button Name="FillFromSearchButton" Content="📋 從搜尋填入" 
                             Click="FillFromSearchButton_Click" Margin="10,0,0,0" Padding="10,5"
                             Background="LightYellow" IsEnabled="False"

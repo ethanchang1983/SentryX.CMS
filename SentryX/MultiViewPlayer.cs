@@ -96,6 +96,7 @@ namespace SentryX
             public DecodeMode DecodeMode { get; set; }
             public VideoStreamType StreamType { get; set; }
             public string DeviceName { get; set; } = "";
+            public string DeviceId { get; set; } = ""; // 新增：設備ID
         }
 
         /// <summary>
@@ -183,13 +184,14 @@ namespace SentryX
         /// <summary>
         /// 開始播放視頻 - 增強版本，記錄播放狀態
         /// </summary>
-        /// <param name="deviceHandle">設備句柄</param>
+        /// <param name="deviceHandle">設備句handles</param>
         /// <param name="channel">通道號</param>
         /// <param name="decodeMode">解碼模式</param>
         /// <param name="streamType">碼流類型</param>
         /// <param name="deviceName">設備名稱</param>
+        /// <param name="deviceId">設備ID</param>
         /// <returns>是否成功開始播放</returns>
-        public bool StartPlay(IntPtr deviceHandle, int channel, DecodeMode decodeMode, VideoStreamType streamType, string deviceName = "")
+        public bool StartPlay(IntPtr deviceHandle, int channel, DecodeMode decodeMode, VideoStreamType streamType, string deviceName = "", string deviceId = "")
         {
             try
             {
@@ -212,7 +214,8 @@ namespace SentryX
                     Channel = channel,
                     DecodeMode = decodeMode,
                     StreamType = streamType,
-                    DeviceName = deviceName
+                    DeviceName = deviceName,
+                    DeviceId = !string.IsNullOrEmpty(deviceId) ? deviceId : deviceName // 使用傳入的deviceId，如果沒有則用deviceName
                 };
 
                 // 確保顯示狀態正確
@@ -221,7 +224,7 @@ namespace SentryX
                 // 建立新的播放器
                 _videoPlayer = new SimpleVideoPlayer(decodeMode, streamType);
 
-                // 取得視頻面板的句柄
+                // 取得視頻面板的句handles
                 IntPtr windowHandle = _videoPanel.Handle;
                 if (windowHandle == IntPtr.Zero)
                 {
@@ -326,6 +329,30 @@ namespace SentryX
                 Debug.WriteLine($"MultiViewPlayer {Index}: 強制重新整理顯示時發生異常 - {ex.Message}");
             }
         }
+
+        /// <summary>
+        /// 取得當前播放狀態 - 為回放功能提供支援
+        /// </summary>
+        /// <returns>當前播放狀態，如果沒有播放則返回 null</returns>
+        public PlaybackState? GetCurrentPlaybackState()
+        {
+            return CurrentPlaybackState;
+        }
+
+        /// <summary>
+        /// 取得視頻面板 - 為回放功能提供視窗句柄
+        /// </summary>
+        public Panel VideoPanel => _videoPanel;
+
+        /// <summary>
+        /// 設備 ID - 從播放狀態中提取
+        /// </summary>
+        public string? DeviceId => CurrentPlaybackState?.DeviceId;
+
+        /// <summary>
+        /// 通道號 - 從播放狀態中提取
+        /// </summary>
+        public int? Channel => CurrentPlaybackState?.Channel;
 
         // === 私有方法 ===
 

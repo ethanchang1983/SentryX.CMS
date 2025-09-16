@@ -103,6 +103,7 @@
                     <!-- 播放控制按鈕 -->
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" 
                                Margin="20,0,0,0">
+                        <!-- 實況播放控制 -->
                         <Button Name="StartVideoButton" Content="▶️ 播放" Margin="5,0" 
                                 Click="StartVideoButton_Click" IsEnabled="False"
                                 ToolTip="開始播放選中的攝影機通道"/>
@@ -112,6 +113,20 @@
                         <Button Name="StopAllVideoButton" Content="⏹️ 全停" Margin="5,0" 
                                 Click="StopAllVideoButton_Click" IsEnabled="False"
                                 ToolTip="停止所有視頻播放"/>
+                        
+                        <!-- 分隔線 -->
+                        <Rectangle Width="2" Height="20" Fill="Gray" Margin="10,0"/>
+                        
+                        <!-- 回放控制按鈕 -->
+                        <Button Name="PlaybackControlButton" Content="📹 回放控制" Margin="5,0" 
+                                Click="PlaybackControlButton_Click"
+                                ToolTip="開啟回放控制視窗，可選擇時間範圍進行回放"/>
+                        <Button Name="QuickPlaybackButton" Content="⏮️ 快速回放" Margin="5,0" 
+                                Click="QuickPlaybackButton_Click"
+                                ToolTip="快速切換到回放模式（過去1小時）"/>
+                        <Button Name="BackToLiveButton" Content="📺 回實況" Margin="5,0" 
+                                Click="BackToLiveButton_Click"
+                                ToolTip="從回放模式切換回實況播放"/>
                     </StackPanel>
                 </StackPanel>
 

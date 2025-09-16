@@ -8,13 +8,15 @@ namespace SentryX
     public partial class MainWindow : Window
     {
         private DeviceManagerWindow? _deviceManager = null;
-        
+
         // 將所有管理器改為私有字段，避免在 XAML 解析期間被存取
         private UIInitializationManager? _uiManager;
         private SplitScreenManager? _splitScreenManager;
         private VideoPlaybackManager? _playbackManager;
+        private PlaybackManager? _playbackControlManager;
         private DeviceListManager? _deviceListManager;
         private PerformanceMonitorManager? _performanceManager;
+        private PlaybackControlDialog? _playbackControlDialog;
 
         // 公開屬性，但添加 null 檢查
         public UIInitializationManager UIManager => _uiManager ?? throw new InvalidOperationException("UIManager 尚未初始化");
@@ -29,7 +31,7 @@ namespace SentryX
             {
                 // 首先初始化 XAML 組件
                 InitializeComponent();
-                
+
                 // 然後初始化管理器
                 InitializeManagers();
 
@@ -64,6 +66,7 @@ namespace SentryX
             _uiManager = new UIInitializationManager(this);
             _splitScreenManager = new SplitScreenManager(this);
             _playbackManager = new VideoPlaybackManager(this, _splitScreenManager);
+            _playbackControlManager = new PlaybackManager(this, _splitScreenManager);
             _deviceListManager = new DeviceListManager(this);
             _performanceManager = new PerformanceMonitorManager(this, _splitScreenManager);
         }
@@ -285,6 +288,174 @@ namespace SentryX
             }
         }
 
+        /// <summary>
+        /// 回放控制按鈕點擊事件
+        /// </summary>
+        private void PlaybackControlButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (_playbackControlManager == null)
+                {
+                    ShowMessage("❌ 回放管理器尚未初始化");
+                    return;
+                }
+
+                // 檢查是否已經有回放控制視窗開啟
+                if (_playbackControlDialog != null && _playbackControlDialog.IsVisible)
+                {
+                    _playbackControlDialog.Activate();
+                    _playbackControlDialog.WindowState = WindowState.Normal;
+                    ShowMessage("回放控制視窗已激活");
+                    return;
+                }
+
+                // 建立新的回放控制視窗
+                _playbackControlDialog = new PlaybackControlDialog(this, _playbackControlManager);
+                _playbackControlDialog.Owner = this;
+                _playbackControlDialog.Closed += (s, args) =>
+                {
+                    _playbackControlDialog = null;
+                    ShowMessage("回放控制視窗已關閉");
+                };
+
+                _playbackControlDialog.Show();
+                ShowMessage("📹 回放控制視窗已開啟");
+            }
+            catch (Exception ex)
+            {
+                ShowMessage($"❌ 開啟回放控制視窗失敗: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 快速切換到回放模式（過去1小時）- 修正版本
+        /// </summary>
+        private void QuickPlaybackButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (_playbackControlManager == null)
+                {
+                    ShowMessage("❌ 回放管理器尚未初始化");
+                    return;
+                }
+
+                var selectedPlayer = _splitScreenManager?.SelectedPlayer;
+                if (selectedPlayer == null)
+                {
+                    ShowMessage("❌ 請先選擇一個分割區域");
+                    return;
+                }
+
+                if (!selectedPlayer.IsPlaying)
+                {
+                    ShowMessage("❌ 選中的區域沒有正在播放的視頻");
+                    return;
+                }
+
+                // 修正：檢查是否已經在回放模式
+                if (_playbackControlManager.IsInPlaybackMode(selectedPlayer.Index))
+                {
+                    ShowMessage("⚠️ 選中的區域已經在回放模式，請先切換回實況模式");
+                    return;
+                }
+
+                // 快速設定為過去1小時的回放
+                var endTime = DateTime.Now;
+                var startTime = endTime.AddHours(-1);
+
+                ShowMessage($"🕐 快速切換到回放模式（過去1小時）：{startTime:HH:mm:ss} - {endTime:HH:mm:ss}");
+
+                // 修正：使用按索引的方法
+                if (_playbackControlManager.SwitchToPlaybackByIndex(selectedPlayer.Index, startTime, endTime))
+                {
+                    ShowMessage("✅ 快速回放模式啟動成功");
+
+                    // 修正：通知回放控制對話框更新狀態（如果開啟的話）
+                    NotifyPlaybackDialogUpdate();
+                }
+                else
+                {
+                    ShowMessage("❌ 快速回放模式啟動失敗");
+                }
+            }
+            catch (Exception ex)
+            {
+                ShowMessage($"❌ 快速回放切換失敗: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 切換回實況模式 - 修正版本
+        /// </summary>
+        private void BackToLiveButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (_playbackControlManager == null)
+                {
+                    ShowMessage("❌ 回放管理器尚未初始化");
+                    return;
+                }
+
+                var selectedPlayer = _splitScreenManager?.SelectedPlayer;
+                if (selectedPlayer == null)
+                {
+                    ShowMessage("❌ 請先選擇一個分割區域");
+                    return;
+                }
+
+                if (!_playbackControlManager.IsInPlaybackMode(selectedPlayer.Index))
+                {
+                    ShowMessage("⚠️ 選中的區域不在回放模式");
+                    return;
+                }
+
+                ShowMessage("🔄 正在切換回實況模式...");
+
+                // 修正：使用按索引的方法
+                if (_playbackControlManager.SwitchToLiveByIndex(selectedPlayer.Index))
+                {
+                    ShowMessage("✅ 已切換回實況模式");
+
+                    // 修正：通知回放控制對話框更新狀態（如果開啟的話）
+                    NotifyPlaybackDialogUpdate();
+                }
+                else
+                {
+                    ShowMessage("❌ 切換實況模式失敗");
+                }
+            }
+            catch (Exception ex)
+            {
+                ShowMessage($"❌ 切換實況模式失敗: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 新增：通知回放控制對話框更新狀態
+        /// </summary>
+        private void NotifyPlaybackDialogUpdate()
+        {
+            try
+            {
+                if (_playbackControlDialog != null && _playbackControlDialog.IsVisible)
+                {
+                    // 使用 Dispatcher 確保在正確的線程上更新 UI
+                    _playbackControlDialog.Dispatcher.Invoke(() =>
+                    {
+                        // 呼叫對話框的更新方法（需要在 PlaybackControlDialog 中新增此方法）
+                        _playbackControlDialog.RefreshCurrentStatus();
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                ShowMessage($"通知回放對話框更新時發生錯誤: {ex.Message}");
+            }
+        }
+
         #endregion
 
         #region Public Methods for Managers
@@ -394,9 +565,11 @@ namespace SentryX
             try
             {
                 _performanceManager?.StopMonitoring();
+                _playbackControlManager?.Cleanup(); // 新增：清理回放資源
                 _splitScreenManager?.StopAllVideoPlayers();
                 SimpleVideoPlayer.GlobalCleanup();
                 _deviceManager?.Close();
+                _playbackControlDialog?.Close(); // 新增：關閉回放控制視窗
                 _uiManager?.UnsubscribeEvents();
             }
             catch (Exception ex)

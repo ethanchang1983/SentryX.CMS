@@ -60,7 +60,8 @@ namespace SentryX
 
                 _mainWindow.ShowMessage($"準備使用{decodeModeText}在分割區域 {targetPlayer.Index + 1} 播放 {device.Name} 通道{channel + 1} 的{streamTypeText}視頻...");
 
-                if (targetPlayer.StartPlay(device.LoginHandle, channel, _currentDecodeMode, _currentStreamType, device.Name))
+                // 修改這裡：傳遞設備ID
+                if (targetPlayer.StartPlay(device.LoginHandle, channel, _currentDecodeMode, _currentStreamType, device.Name, device.Id))
                 {
                     _mainWindow.ShowMessage($"開始播放 {device.Name} 通道{channel + 1} 的即時視頻 ({decodeModeText}, {streamTypeText}) - 分割區域 {targetPlayer.Index + 1}");
                     _splitScreenManager.SelectNextAvailablePlayer();
@@ -131,7 +132,11 @@ namespace SentryX
                     
                     _mainWindow.ShowMessage($"正在播放 {device.Name} 通道{channel + 1} 到分割區域 {targetPlayer.Index + 1}...");
                     
-                    if (targetPlayer.StartPlay(device.LoginHandle, channel, _currentDecodeMode, _currentStreamType, device.Name))
+                    // 同樣修改 StartMultiChannelPlayback 方法中的 StartPlay 調用
+                    // 將：
+                    // if (targetPlayer.StartPlay(device.LoginHandle, channel, _currentDecodeMode, _currentStreamType, device.Name))
+                    // 改為：
+                    if (targetPlayer.StartPlay(device.LoginHandle, channel, _currentDecodeMode, _currentStreamType, device.Name, device.Id))
                     {
                         successCount++;
                         _mainWindow.ShowMessage($"✅ 通道{channel + 1} 播放成功 - 分割區域 {targetPlayer.Index + 1}");

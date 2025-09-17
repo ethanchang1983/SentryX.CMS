@@ -21,6 +21,13 @@ namespace SentryX
         private double _timelineWidth = 700; // 時間軸寬度
         private List<RecordSegment> _recordSegments = new List<RecordSegment>();
 
+        // 新增：時間軸縮放相關變數
+        private double _timelineZoomLevel = 1.0; // 縮放級別
+        private DateTime _timelineViewStart = DateTime.Today; // 視圖開始時間
+        private DateTime _timelineViewEnd = DateTime.Today.AddDays(1); // 視圖結束時間
+        private double _minZoomLevel = 0.1; // 最小縮放（10倍放大，看6分鐘）
+        private double _maxZoomLevel = 10.0; // 最大縮放（縮小10倍，看10天）
+
         // 固定的目標播放器索引
         private MultiViewPlayer? _initialSelectedPlayer;
         private int _targetPlayerIndex = -1;
@@ -42,6 +49,202 @@ namespace SentryX
             InitializeTimeline();
             InitializeDatePicker();
             UpdateCurrentStatus();
+
+            // 新增：註冊時間軸滾輪事件
+            TimelineCanvas.MouseWheel += TimelineCanvas_MouseWheel;
+        }
+
+        /// <summary>
+        /// 新增：時間軸滾輪事件處理 - 實現專業CMS的縮放功能
+        /// </summary>
+        private void TimelineCanvas_MouseWheel(object sender, MouseWheelEventArgs e)
+        {
+            try
+            {
+                // 取得滑鼠在時間軸上的位置
+                var mousePos = e.GetPosition(TimelineCanvas);
+                var mouseTimePosition = GetTimeFromPosition(mousePos.X);
+
+                // 計算縮放因子
+                double zoomFactor = e.Delta > 0 ? 0.8 : 1.25; // 滾輪上：縮小範圍(放大), 滾輪下：擴大範圍(縮小)
+                double newZoomLevel = _timelineZoomLevel * zoomFactor;
+
+                // 限制縮放範圍
+                newZoomLevel = Math.Max(_minZoomLevel, Math.Min(_maxZoomLevel, newZoomLevel));
+
+                if (Math.Abs(newZoomLevel - _timelineZoomLevel) < 0.01) // 達到縮放極限
+                {
+                    return;
+                }
+
+                // 計算新的時間範圍
+                var currentSpan = _timelineViewEnd - _timelineViewStart;
+                var newSpan = TimeSpan.FromTicks((long)(currentSpan.Ticks / zoomFactor));
+
+                // 以滑鼠位置為中心進行縮放
+                var mouseRatio = (mouseTimePosition - _timelineViewStart).Ticks / (double)currentSpan.Ticks;
+                mouseRatio = Math.Max(0, Math.Min(1, mouseRatio)); // 確保比例在0-1之間
+
+                var newStart = mouseTimePosition.AddTicks(-(long)(newSpan.Ticks * mouseRatio));
+                var newEnd = newStart.Add(newSpan);
+
+                // 確保時間範圍不超出當天限制
+                var selectedDate = PlaybackDatePicker.SelectedDate ?? DateTime.Today;
+                var dayStart = selectedDate.Date;
+                var dayEnd = dayStart.AddDays(1);
+
+                if (newStart < dayStart)
+                {
+                    newStart = dayStart;
+                    newEnd = newStart.Add(newSpan);
+                }
+                if (newEnd > dayEnd)
+                {
+                    newEnd = dayEnd;
+                    newStart = newEnd.Subtract(newSpan);
+                }
+
+                // 更新縮放級別和視圖範圍
+                _timelineZoomLevel = newZoomLevel;
+                _timelineViewStart = newStart;
+                _timelineViewEnd = newEnd;
+
+                // 重新繪製時間軸
+                RedrawTimelineWithZoom();
+
+                // 更新狀態訊息
+                var spanMinutes = newSpan.TotalMinutes;
+                string spanText;
+                if (spanMinutes < 60)
+                {
+                    spanText = $"{spanMinutes:F1}分鐘";
+                }
+                else if (spanMinutes < 1440) // 24小時
+                {
+                    spanText = $"{spanMinutes / 60:F1}小時";
+                }
+                else
+                {
+                    spanText = $"{spanMinutes / 1440:F1}天";
+                }
+
+                AddStatusMessage($"時間軸縮放：{spanText} (級別: {_timelineZoomLevel:F2}x)");
+
+                e.Handled = true;
+            }
+            catch (Exception ex)
+            {
+                AddStatusMessage($"時間軸縮放時發生錯誤：{ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 新增：根據縮放重新繪製時間軸
+        /// </summary>
+        private void RedrawTimelineWithZoom()
+        {
+            // 更新時間範圍
+            SetTimelineRange(_timelineViewStart, _timelineViewEnd);
+
+            // 重新建立時間標籤
+            CreateZoomedTimeLabels();
+
+            // 重新顯示錄影區段
+            DisplayRecordSegments();
+        }
+
+        /// <summary>
+        /// 新增：建立適應縮放的時間標籤
+        /// </summary>
+        private void CreateZoomedTimeLabels()
+        {
+            var labelsCanvas = TimelineCanvas.Parent as Grid;
+            var timeLabelsCanvas = labelsCanvas?.Children.OfType<Canvas>().FirstOrDefault();
+
+            if (timeLabelsCanvas == null) return;
+
+            timeLabelsCanvas.Children.Clear();
+
+            var timeSpan = _timelineViewEnd - _timelineViewStart;
+            var totalMinutes = timeSpan.TotalMinutes;
+
+            // 根據時間範圍決定標籤間隔
+            TimeSpan labelInterval;
+            string labelFormat;
+
+            if (totalMinutes <= 60) // 1小時內 - 每10分鐘一個標籤
+            {
+                labelInterval = TimeSpan.FromMinutes(10);
+                labelFormat = "HH:mm";
+            }
+            else if (totalMinutes <= 360) // 6小時內 - 每30分鐘一個標籤
+            {
+                labelInterval = TimeSpan.FromMinutes(30);
+                labelFormat = "HH:mm";
+            }
+            else if (totalMinutes <= 1440) // 24小時內 - 每2小時一個標籤
+            {
+                labelInterval = TimeSpan.FromHours(2);
+                labelFormat = "HH:mm";
+            }
+            else if (totalMinutes <= 4320) // 3天內 - 每6小時一個標籤
+            {
+                labelInterval = TimeSpan.FromHours(6);
+                labelFormat = "MM/dd HH:mm";
+            }
+            else // 3天以上 - 每12小時一個標籤
+            {
+                labelInterval = TimeSpan.FromHours(12);
+                labelFormat = "MM/dd HH:mm";
+            }
+
+            // 計算第一個標籤的時間（對齊到間隔）
+            var firstLabelTime = new DateTime(
+                _timelineViewStart.Year,
+                _timelineViewStart.Month,
+                _timelineViewStart.Day,
+                _timelineViewStart.Hour,
+                (_timelineViewStart.Minute / (int)labelInterval.TotalMinutes) * (int)labelInterval.TotalMinutes,
+                0
+            );
+
+            // 添加標籤
+            var currentTime = firstLabelTime;
+            while (currentTime <= _timelineViewEnd)
+            {
+                if (currentTime >= _timelineViewStart)
+                {
+                    var position = GetPositionFromTime(currentTime);
+                    if (position >= 0 && position <= _timelineWidth)
+                    {
+                        var label = new TextBlock
+                        {
+                            Text = currentTime.ToString(labelFormat),
+                            FontSize = 9,
+                            Foreground = System.Windows.Media.Brushes.Black
+                        };
+
+                        Canvas.SetLeft(label, position - 20); // 置中對齊
+                        Canvas.SetTop(label, 0);
+
+                        timeLabelsCanvas.Children.Add(label);
+                    }
+                }
+                currentTime = currentTime.Add(labelInterval);
+            }
+        }
+
+        /// <summary>
+        /// 新增：從時間計算在時間軸上的位置
+        /// </summary>
+        private double GetPositionFromTime(DateTime time)
+        {
+            var totalSpan = _timelineViewEnd - _timelineViewStart;
+            var timeSpan = time - _timelineViewStart;
+
+            if (totalSpan.TotalSeconds <= 0) return 0;
+
+            return (timeSpan.TotalSeconds / totalSpan.TotalSeconds) * _timelineWidth;
         }
 
         /// <summary>
@@ -53,14 +256,15 @@ namespace SentryX
             {
                 _timelineWidth = TimelineCanvas.ActualWidth > 0 ? TimelineCanvas.ActualWidth : 700;
 
-                // 設定預設時間範圍（過去1小時）
-                var endTime = DateTime.Now;
-                var startTime = endTime.AddHours(-1);
+                // 設定預設時間範圍（當天全天）
+                var selectedDate = PlaybackDatePicker.SelectedDate ?? DateTime.Today;
+                _timelineViewStart = selectedDate.Date;
+                _timelineViewEnd = selectedDate.Date.AddDays(1);
 
-                SetTimelineRange(startTime, endTime);
-                CreateTimeLabels();
+                SetTimelineRange(_timelineViewStart.AddHours(6), _timelineViewStart.AddHours(18)); // 預設顯示6-18點
+                CreateZoomedTimeLabels();
 
-                AddStatusMessage("時間軸已初始化");
+                AddStatusMessage("時間軸已初始化，支援滾輪縮放功能");
             }
             catch (Exception ex)
             {
@@ -81,28 +285,8 @@ namespace SentryX
         /// </summary>
         private void CreateTimeLabels()
         {
-            var labelsCanvas = TimelineCanvas.Parent as Grid;
-            var timeLabelsCanvas = labelsCanvas?.Children.OfType<Canvas>().FirstOrDefault();
-
-            if (timeLabelsCanvas == null) return;
-
-            timeLabelsCanvas.Children.Clear();
-
-            for (int hour = 0; hour <= 24; hour++)
-            {
-                var label = new TextBlock
-                {
-                    Text = $"{hour:D2}:00",
-                    FontSize = 10,
-                    Foreground = System.Windows.Media.Brushes.Black
-                };
-
-                double position = (hour / 24.0) * _timelineWidth;
-                Canvas.SetLeft(label, position - 15); // 置中對齊
-                Canvas.SetTop(label, 0);
-
-                timeLabelsCanvas.Children.Add(label);
-            }
+            // 使用新的縮放時間標籤方法
+            CreateZoomedTimeLabels();
         }
 
         /// <summary>
@@ -111,17 +295,15 @@ namespace SentryX
         private void SetTimelineRange(DateTime startTime, DateTime endTime)
         {
             var selectedDate = PlaybackDatePicker.SelectedDate ?? DateTime.Today;
-            var dayStart = selectedDate.Date;
-            var dayEnd = dayStart.AddDays(1);
 
             // 限制在選中的日期範圍內
-            if (startTime < dayStart) startTime = dayStart;
-            if (endTime > dayEnd) endTime = dayEnd;
+            if (startTime < _timelineViewStart) startTime = _timelineViewStart;
+            if (endTime > _timelineViewEnd) endTime = _timelineViewEnd;
             if (startTime >= endTime) endTime = startTime.AddMinutes(30);
 
-            // 計算在24小時中的位置
-            double startPosition = ((startTime - dayStart).TotalHours / 24.0) * _timelineWidth;
-            double endPosition = ((endTime - dayStart).TotalHours / 24.0) * _timelineWidth;
+            // 計算在當前視圖範圍中的位置
+            double startPosition = GetPositionFromTime(startTime);
+            double endPosition = GetPositionFromTime(endTime);
 
             // 更新時間指針位置
             Canvas.SetLeft(StartTimeMarker, startPosition);
@@ -148,11 +330,10 @@ namespace SentryX
         /// </summary>
         private DateTime GetTimeFromPosition(double position)
         {
-            var selectedDate = PlaybackDatePicker.SelectedDate ?? DateTime.Today;
-            var dayStart = selectedDate.Date;
+            var totalSpan = _timelineViewEnd - _timelineViewStart;
+            double ratio = Math.Max(0, Math.Min(1, position / _timelineWidth));
 
-            double hourOffset = (position / _timelineWidth) * 24.0;
-            return dayStart.AddHours(Math.Max(0, Math.Min(24, hourOffset)));
+            return _timelineViewStart.AddTicks((long)(totalSpan.Ticks * ratio));
         }
 
         /// <summary>
@@ -276,17 +457,25 @@ namespace SentryX
                 TimelineCanvas.Children.Remove(segment);
             }
 
-            var selectedDate = PlaybackDatePicker.SelectedDate ?? DateTime.Today;
-            var dayStart = selectedDate.Date;
-
             // 顯示錄影區段
             for (int i = 0; i < _recordSegments.Count; i++)
             {
                 var segment = _recordSegments[i];
 
+                // 檢查區段是否在當前視圖範圍內
+                if (segment.EndTime < _timelineViewStart || segment.StartTime > _timelineViewEnd)
+                {
+                    continue; // 跳過不在視圖範圍內的區段
+                }
+
                 // 計算區段在時間軸上的位置
-                double startPos = ((segment.StartTime - dayStart).TotalHours / 24.0) * _timelineWidth;
-                double endPos = ((segment.EndTime - dayStart).TotalHours / 24.0) * _timelineWidth;
+                double startPos = GetPositionFromTime(segment.StartTime);
+                double endPos = GetPositionFromTime(segment.EndTime);
+
+                // 確保位置在可見範圍內
+                startPos = Math.Max(0, startPos);
+                endPos = Math.Min(_timelineWidth, endPos);
+
                 double width = Math.Max(2, endPos - startPos);
 
                 var segmentRect = new System.Windows.Shapes.Rectangle
@@ -352,41 +541,24 @@ namespace SentryX
             TimelineCanvas.CaptureMouse();
         }
 
-        // 修正 CS0104：明確指定 MouseEventArgs 來自 System.Windows.Input
         private void TimelineCanvas_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
         {
-
             if (!_isDragging) return;
 
-
-
             var mousePos = e.GetPosition(TimelineCanvas);
-
             var x = Math.Max(0, Math.Min(_timelineWidth, mousePos.X));
 
-
-
             if (_dragTarget == "start")
-
             {
-
                 Canvas.SetLeft(StartTimeMarker, x);
-
             }
-
             else if (_dragTarget == "end")
-
             {
-
                 Canvas.SetLeft(EndTimeMarker, x);
-
             }
-
-
 
             UpdateTimeFromMarkers();
-
-        }
+        }
 
         private void TimelineCanvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
         {
@@ -417,6 +589,38 @@ namespace SentryX
             var endTime = GetTimeFromPosition(endPos);
 
             UpdateTimeDisplay(startTime, endTime);
+        }
+
+        // === 新增：時間軸控制方法 ===
+
+        /// <summary>
+        /// 重置時間軸縮放到全天視圖
+        /// </summary>
+        private void ResetTimelineZoom()
+        {
+            var selectedDate = PlaybackDatePicker.SelectedDate ?? DateTime.Today;
+            _timelineViewStart = selectedDate.Date;
+            _timelineViewEnd = selectedDate.Date.AddDays(1);
+            _timelineZoomLevel = 1.0;
+
+            RedrawTimelineWithZoom();
+            AddStatusMessage("時間軸已重置為全天視圖");
+        }
+
+        /// <summary>
+        /// 縮放到指定時間範圍
+        /// </summary>
+        private void ZoomToTimeRange(DateTime start, DateTime end)
+        {
+            _timelineViewStart = start;
+            _timelineViewEnd = end;
+
+            var totalSpan = end - start;
+            var daySpan = TimeSpan.FromDays(1);
+            _timelineZoomLevel = daySpan.TotalSeconds / totalSpan.TotalSeconds;
+
+            RedrawTimelineWithZoom();
+            AddStatusMessage($"時間軸已縮放到：{start:HH:mm} - {end:HH:mm}");
         }
 
         // === 原有的方法（保持不變） ===
@@ -450,7 +654,11 @@ namespace SentryX
                 return;
             }
 
-            if (!targetPlayer.IsPlaying && !_playbackManager.IsInPlaybackMode(_targetPlayerIndex))
+            // 修正：檢查回放模式時也應該允許全螢幕
+            bool isInPlaybackMode = _playbackManager.IsInPlaybackMode(_targetPlayerIndex);
+            bool hasContent = targetPlayer.IsPlaying || isInPlaybackMode;
+
+            if (!hasContent)
             {
                 CurrentStatusText.Text = "❌ 選中的區域沒有正在播放的視頻";
                 DeviceInfoText.Text = $"分割區域 {_targetPlayerIndex + 1} - 沒有播放內容";
@@ -459,7 +667,7 @@ namespace SentryX
                 return;
             }
 
-            if (_playbackManager.IsInPlaybackMode(_targetPlayerIndex))
+            if (isInPlaybackMode)
             {
                 var session = _playbackManager.GetPlaybackSession(_targetPlayerIndex);
                 CurrentStatusText.Text = "🔄 當前為回放模式";
@@ -489,9 +697,15 @@ namespace SentryX
 
         private void PlaybackDatePicker_SelectedDateChanged(object sender, SelectionChangedEventArgs e)
         {
-            CreateTimeLabels();
+            // 重設時間軸到新的日期
+            var selectedDate = PlaybackDatePicker.SelectedDate ?? DateTime.Today;
+            _timelineViewStart = selectedDate.Date;
+            _timelineViewEnd = selectedDate.Date.AddDays(1);
+            _timelineZoomLevel = 1.0;
+
+            RedrawTimelineWithZoom();
             QueryAndDisplayRecordSegments();
-            AddStatusMessage($"已切換到日期：{PlaybackDatePicker.SelectedDate:yyyy-MM-dd}");
+            AddStatusMessage($"已切換到日期：{selectedDate:yyyy-MM-dd}");
         }
 
         private void SetToday_Click(object sender, RoutedEventArgs e)
@@ -551,6 +765,8 @@ namespace SentryX
                         return;
                 }
 
+                // 使用新的縮放功能
+                ZoomToTimeRange(startTime, endTime);
                 SetTimelineRange(startTime, endTime);
                 AddStatusMessage($"已設定時間範圍：{button.Content}");
             }

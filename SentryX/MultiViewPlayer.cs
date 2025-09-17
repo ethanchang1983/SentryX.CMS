@@ -42,9 +42,36 @@ namespace SentryX
         private SimpleVideoPlayer? _videoPlayer;
 
         /// <summary>
-        /// 是否正在播放
+        /// 是否正在播放 - 修正版本，支援回放模式檢測
         /// </summary>
-        public bool IsPlaying => _videoPlayer?.IsPlaying ?? false;
+        public bool IsPlaying 
+        { 
+            get 
+            {
+                // 檢查實況播放
+                bool isLivePlaying = _videoPlayer?.IsPlaying ?? false;
+                
+                // 檢查回放模式（需要通過外部回放管理器檢查）
+                bool isInPlaybackMode = false;
+                try
+                {
+                    // 這裡可以通過靜態方法或其他方式檢查回放狀態
+                    // 暫時先檢查是否有播放狀態記錄
+                    isInPlaybackMode = CurrentPlaybackState != null && HasActiveContent;
+                }
+                catch
+                {
+                    // 如果檢查失敗，忽略錯誤
+                }
+                
+                return isLivePlaying || isInPlaybackMode;
+            } 
+        }
+
+        /// <summary>
+        /// 新增：是否有活躍內容（實況或回放）
+        /// </summary>
+        public bool HasActiveContent { get; set; } = false;
 
         /// <summary>
         /// 視頻資訊
@@ -235,6 +262,7 @@ namespace SentryX
                 // 開始播放
                 if (_videoPlayer.StartPlay(deviceHandle, channel, windowHandle, deviceName))
                 {
+                    HasActiveContent = true; // 標記為有活躍內容
                     Debug.WriteLine($"MultiViewPlayer {Index}: 開始播放成功 {deviceName} 通道 {channel} ({streamType})");
                     return true;
                 }
@@ -243,6 +271,7 @@ namespace SentryX
                     _videoPlayer.Dispose();
                     _videoPlayer = null;
                     CurrentPlaybackState = null; // 播放失敗，清除狀態
+                    HasActiveContent = false;
                     Debug.WriteLine($"MultiViewPlayer {Index}: 播放失敗");
                     return false;
                 }
@@ -251,6 +280,7 @@ namespace SentryX
             {
                 Debug.WriteLine($"MultiViewPlayer {Index}: 開始播放時發生異常 - {ex.Message}");
                 CurrentPlaybackState = null; // 異常時清除狀態
+                HasActiveContent = false;
                 return false;
             }
         }
@@ -278,6 +308,7 @@ namespace SentryX
                 if (!keepPlaybackState)
                 {
                     CurrentPlaybackState = null;
+                    HasActiveContent = false; // 清除活躍內容標記
                 }
 
                 // 完全重置顯示狀態
@@ -289,6 +320,16 @@ namespace SentryX
             {
                 Debug.WriteLine($"MultiViewPlayer {Index}: 停止播放時發生異常 - {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// 新增：設定回放模式狀態
+        /// </summary>
+        /// <param name="isInPlayback">是否在回放模式</param>
+        public void SetPlaybackMode(bool isInPlayback)
+        {
+            HasActiveContent = isInPlayback || (_videoPlayer?.IsPlaying ?? false);
+            Debug.WriteLine($"MultiViewPlayer {Index}: 回放模式設定為 {isInPlayback}, 活躍內容: {HasActiveContent}");
         }
 
         /// <summary>

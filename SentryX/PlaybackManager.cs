@@ -98,6 +98,9 @@ namespace SentryX
                 // 開始回放
                 if (StartPlayback(targetPlayer, currentState, startTime, actualEndTime))
                 {
+                    // 設定播放器為回放模式
+                    targetPlayer.SetPlaybackMode(true);
+                    
                     _mainWindow.ShowMessage($"✅ 已切換到回放模式：{startTime:yyyy-MM-dd HH:mm:ss} - {actualEndTime:yyyy-MM-dd HH:mm:ss}");
                     return true;
                 }
@@ -163,6 +166,9 @@ namespace SentryX
 
                     // 停止回放 - 強制清理
                     StopPlayback(playerIndex, forceCleanup: true);
+
+                    // 設定播放器退出回放模式
+                    targetPlayer.SetPlaybackMode(false);
 
                     // 等待回放完全停止
                     System.Threading.Thread.Sleep(200);
@@ -457,6 +463,13 @@ namespace SentryX
                         {
                             _mainWindow.ShowMessage($"停止回放API調用失敗：{ex.Message}");
                         }
+                    }
+
+                    // 獲取播放器並設定退出回放模式
+                    if (playerIndex >= 0 && playerIndex < _splitScreenManager.VideoPlayers.Count)
+                    {
+                        var player = _splitScreenManager.VideoPlayers[playerIndex];
+                        player.SetPlaybackMode(false);
                     }
 
                     // 移除會話記錄

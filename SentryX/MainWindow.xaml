@@ -111,7 +111,7 @@
                                 Click="StopVideoButton_Click" IsEnabled="False"
                                 ToolTip="停止視頻播放"/>
                         <Button Name="StopAllVideoButton" Content="⏹️ 全停" Margin="5,0" 
-                                Click="StopAllVideoButton_Click" IsEnabled="False"
+                                Click="StopAllVideoButton_Click"
                                 ToolTip="停止所有視頻播放"/>
                         
                         <!-- 分隔線 -->

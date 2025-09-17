@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -89,6 +90,9 @@ namespace SentryX
 
                 _splitScreenManager?.CreateSplitScreenLayout(1);
                 ShowMessage("📺 視頻顯示區域準備完成（1分割模式）");
+                
+                // 初始化按鈕狀態
+                UpdateButtonStates();
             }
             catch (Exception ex)
             {
@@ -206,9 +210,30 @@ namespace SentryX
             if (string.IsNullOrEmpty(deviceId))
             {
                 ShowMessage("❌ 未選擇設備，無法啟動視頻播放");
-                if (StartVideoButton != null) StartVideoButton.IsEnabled = false;
-                if (StopVideoButton != null) StopVideoButton.IsEnabled = false;
+                UpdateButtonStates();
                 return;
+            }
+
+            // 檢查選中的播放器是否在回放模式
+            var selectedPlayer = _splitScreenManager?.SelectedPlayer;
+            if (selectedPlayer != null && _playbackControlManager?.IsInPlaybackMode(selectedPlayer.Index) == true)
+            {
+                ShowMessage("⚠️ 選中的分割區域正在回放模式，請選擇其他區域或先切換回實況模式");
+                
+                // 自動選擇下一個可用的播放器（不在回放模式且未播放）
+                var availablePlayer = _splitScreenManager.VideoPlayers
+                    .FirstOrDefault(p => !p.IsPlaying && !(_playbackControlManager?.IsInPlaybackMode(p.Index) ?? false));
+                
+                if (availablePlayer != null)
+                {
+                    _splitScreenManager.SelectPlayer(availablePlayer);
+                    ShowMessage($"🔄 已自動選擇可用的分割區域：{availablePlayer.Index + 1}");
+                }
+                else
+                {
+                    ShowMessage("❌ 沒有可用的分割區域，請停止某些播放或切換回實況模式");
+                    return;
+                }
             }
 
             bool success;
@@ -237,21 +262,126 @@ namespace SentryX
                 success = _playbackManager.StartVideoPlayback(deviceId, channel);
             }
 
-            if (StartVideoButton != null) StartVideoButton.IsEnabled = true;
-            if (StopVideoButton != null) StopVideoButton.IsEnabled = success;
+            // 統一更新按鈕狀態
+            UpdateButtonStates();
         }
 
         private void StopVideoButton_Click(object sender, RoutedEventArgs e)
         {
-            int stoppedCount = _playbackManager?.StopAllPlayback() ?? 0;
+            try
+            {
+                var selectedPlayer = _splitScreenManager?.SelectedPlayer;
+                if (selectedPlayer == null)
+                {
+                    ShowMessage("❌ 請先選擇一個分割區域");
+                    return;
+                }
 
-            if (StartVideoButton != null) StartVideoButton.IsEnabled = true;
-            if (StopVideoButton != null) StopVideoButton.IsEnabled = false;
+                bool hasStoppedSomething = false;
+
+                // 檢查選中播放器是否在回放模式，如果是則停止回放
+                if (_playbackControlManager?.IsInPlaybackMode(selectedPlayer.Index) == true)
+                {
+                    if (_playbackControlManager.StopPlayback(selectedPlayer.Index))
+                    {
+                        ShowMessage($"🔄 已停止分割區域 {selectedPlayer.Index + 1} 的回放");
+                        hasStoppedSomething = true;
+                    }
+                }
+
+                // 檢查選中播放器是否在實況播放，如果是則停止實況
+                if (selectedPlayer.IsPlaying)
+                {
+                    if (_splitScreenManager.StopSelectedPlayer())
+                    {
+                        ShowMessage($"🔄 已停止分割區域 {selectedPlayer.Index + 1} 的實況播放");
+                        hasStoppedSomething = true;
+                    }
+                }
+
+                if (hasStoppedSomething)
+                {
+                    // 清除選中分割區域的顯示內容
+                    try
+                    {
+                        selectedPlayer.SetPlaybackMode(false);
+                        selectedPlayer.RefreshDisplay();
+                        ShowMessage($"🧹 已清除分割區域 {selectedPlayer.Index + 1} 的顯示內容");
+                    }
+                    catch (Exception ex)
+                    {
+                        ShowMessage($"清除分割區域 {selectedPlayer.Index + 1} 顯示時發生錯誤：{ex.Message}");
+                    }
+
+                    ShowMessage($"✅ 分割區域 {selectedPlayer.Index + 1} 播放已完全停止並清除顯示");
+                }
+                else
+                {
+                    ShowMessage($"⚠️ 分割區域 {selectedPlayer.Index + 1} 沒有正在播放的內容");
+                }
+            }
+            catch (Exception ex)
+            {
+                ShowMessage($"停止選中區域播放時發生錯誤：{ex.Message}");
+            }
+            finally
+            {
+                // 統一更新按鈕狀態
+                UpdateButtonStates();
+            }
         }
 
         private void StopAllVideoButton_Click(object sender, RoutedEventArgs e)
         {
-            StopVideoButton_Click(sender, e);
+            try
+            {
+                ShowMessage("🛑 開始停止所有分割區域的播放...");
+
+                // 先停止所有回放會話
+                _playbackControlManager?.StopAllPlaybacks();
+                ShowMessage("🔄 已停止所有回放會話");
+
+                // 停止所有實況播放
+                int stoppedCount = _playbackManager?.StopAllPlayback() ?? 0;
+
+                // 強制清除所有分割區域的顯示內容
+                if (_splitScreenManager != null)
+                {
+                    foreach (var player in _splitScreenManager.VideoPlayers)
+                    {
+                        try
+                        {
+                            // 設定為非回放模式
+                            player.SetPlaybackMode(false);
+
+                            // 強制重新整理顯示（清除殘留畫面）
+                            player.RefreshDisplay();
+                        }
+                        catch (Exception ex)
+                        {
+                            ShowMessage($"清除分割區域 {player.Index + 1} 顯示時發生錯誤：{ex.Message}");
+                        }
+                    }
+
+                    ShowMessage("🧹 已強制清除所有分割區域的顯示內容");
+                }
+
+                if (stoppedCount > 0)
+                {
+                    ShowMessage($"✅ 已停止 {stoppedCount} 個實況播放");
+                }
+
+                ShowMessage("🛑 所有播放已完全停止並清除顯示");
+            }
+            catch (Exception ex)
+            {
+                ShowMessage($"停止所有播放時發生錯誤：{ex.Message}");
+            }
+            finally
+            {
+                // 統一更新按鈕狀態
+                UpdateButtonStates();
+            }
         }
 
         private void DeviceListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -261,23 +391,17 @@ namespace SentryX
             if (DeviceListBox.SelectedItem is string selectedText)
             {
                 _deviceListManager?.HandleDeviceSelection(selectedText);
-
-                bool canPlay = !string.IsNullOrEmpty(_deviceListManager?.SelectedDeviceId) &&
-                              _splitScreenManager?.SelectedPlayer != null;
-
-                if (StartVideoButton != null) StartVideoButton.IsEnabled = canPlay;
             }
-            else
-            {
-                if (StartVideoButton != null) StartVideoButton.IsEnabled = false;
-            }
+
+            // 統一更新按鈕狀態
+            UpdateButtonStates();
         }
 
         private void DeviceListBox_MouseDoubleClick(object sender, MouseButtonEventArgs e)
         {
             if (_uiManager?.IsUIInitialized != true) return;
 
-            // 修復錯誤：將錯誤的賦值語法改為正確的比較語法
+            // 檢查是否能夠開始播放
             if (StartVideoButton?.IsEnabled == true && _splitScreenManager?.SelectedPlayer != null)
             {
                 StartVideoButton_Click(sender, new RoutedEventArgs());
@@ -285,6 +409,10 @@ namespace SentryX
             else if (_splitScreenManager?.SelectedPlayer == null)
             {
                 ShowMessage("請先點擊選中一個分割區域");
+            }
+            else
+            {
+                ShowMessage("⚠️ 當前無法開始播放，請檢查設備選擇和分割區域狀態");
             }
         }
 
@@ -453,6 +581,56 @@ namespace SentryX
             catch (Exception ex)
             {
                 ShowMessage($"通知回放對話框更新時發生錯誤: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 新增：統一管理所有按鈕狀態的方法 - 改為公開
+        /// </summary>
+        public void UpdateButtonStates()
+        {
+            try
+            {
+                // 檢查基本條件
+                bool hasSelectedDevice = !string.IsNullOrEmpty(_deviceListManager?.SelectedDeviceId);
+                bool hasSelectedPlayer = _splitScreenManager?.SelectedPlayer != null;
+                bool hasAnyPlaying = _splitScreenManager?.HasAnyPlayerPlaying() ?? false;
+                bool hasAnyPlayback = _playbackControlManager != null && 
+                    _splitScreenManager?.VideoPlayers.Any(p => _playbackControlManager.IsInPlaybackMode(p.Index)) == true;
+
+                // 播放按鈕：需要選中設備和播放器
+                if (StartVideoButton != null)
+                {
+                    StartVideoButton.IsEnabled = hasSelectedDevice && hasSelectedPlayer;
+                }
+
+                // 停止按鈕：需要有選中的播放器，且該播放器有內容在播放或回放
+                if (StopVideoButton != null)
+                {
+                    bool selectedPlayerHasContent = false;
+                    if (hasSelectedPlayer)
+                    {
+                        var selectedPlayer = _splitScreenManager?.SelectedPlayer;
+                        selectedPlayerHasContent = selectedPlayer?.IsPlaying == true || 
+                            (_playbackControlManager?.IsInPlaybackMode(selectedPlayer?.Index ?? -1) ?? false);
+                    }
+                    StopVideoButton.IsEnabled = selectedPlayerHasContent;
+                }
+
+                // 全停按鈕：只要有任何播放或回放就啟用
+                if (StopAllVideoButton != null)
+                {
+                    StopAllVideoButton.IsEnabled = hasAnyPlaying || hasAnyPlayback;
+                }
+
+                // 新增：調試信息，幫助了解按鈕狀態
+                Console.WriteLine($"按鈕狀態更新: 選中設備={hasSelectedDevice}, 選中播放器={hasSelectedPlayer}, " +
+                    $"有播放={hasAnyPlaying}, 有回放={hasAnyPlayback}, " +
+                    $"停止按鈕={StopVideoButton?.IsEnabled}, 全停按鈕={StopAllVideoButton?.IsEnabled}");
+            }
+            catch (Exception ex)
+            {
+                ShowMessage($"更新按鈕狀態時發生錯誤：{ex.Message}");
             }
         }
 

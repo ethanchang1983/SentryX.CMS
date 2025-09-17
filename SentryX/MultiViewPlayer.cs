@@ -111,7 +111,7 @@ namespace SentryX
         /// <summary>
         /// 邊框寬度
         /// </summary>
-        private const int BorderWidth = 2;
+        private const int BorderWidth = 1;
 
         /// <summary>
         /// 記錄播放狀態的相關資訊 - 用於恢復播放

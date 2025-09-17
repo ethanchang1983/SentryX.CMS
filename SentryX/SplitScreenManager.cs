@@ -110,6 +110,12 @@ namespace SentryX
                 SelectPlayer(selectedPlayer);
                 _mainWindow.ShowMessage($"已選中分割區域 {selectedPlayer.Index + 1}");
                 PlayerSelected?.Invoke(selectedPlayer);
+                
+                // 新增：通知 MainWindow 更新按鈕狀態
+                _mainWindow.Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    _mainWindow.UpdateButtonStates();
+                }), System.Windows.Threading.DispatcherPriority.Normal);
             }
             catch (Exception ex)
             {
@@ -322,17 +328,36 @@ namespace SentryX
 
             _selectedPlayer = player;
             _selectedPlayer.IsSelected = true;
+            
+            // 新增：觸發按鈕狀態更新
+            _mainWindow.Dispatcher.BeginInvoke(new Action(() =>
+            {
+                _mainWindow.UpdateButtonStates();
+            }), System.Windows.Threading.DispatcherPriority.Normal);
         }
 
         public void SelectNextAvailablePlayer()
         {
             try
             {
-                var nextPlayer = _videoPlayers.FirstOrDefault(p => !p.IsPlaying);
+                // 首先嘗試找到不在播放且不在回放模式的播放器
+                var nextPlayer = _videoPlayers.FirstOrDefault(p => !p.IsPlaying && !p.HasActiveContent);
+                
+                if (nextPlayer == null)
+                {
+                    // 如果沒有完全空閒的播放器，則找不在播放的播放器（可能在回放模式）
+                    nextPlayer = _videoPlayers.FirstOrDefault(p => !p.IsPlaying);
+                }
+                
                 if (nextPlayer != null)
                 {
                     SelectPlayer(nextPlayer);
-                    _mainWindow.ShowMessage($"自動選中下一個可用區域：分割區域 {nextPlayer.Index + 1}");
+                    string status = nextPlayer.HasActiveContent ? "（回放模式）" : "";
+                    _mainWindow.ShowMessage($"自動選中下一個可用區域：分割區域 {nextPlayer.Index + 1} {status}");
+                }
+                else
+                {
+                    _mainWindow.ShowMessage("⚠️ 沒有可用的分割區域");
                 }
             }
             catch (Exception ex)
@@ -446,17 +471,26 @@ namespace SentryX
                         ExitFullScreenModeSmooth();
                     }
 
+                    // 停止播放（包括實況和可能的回放狀態）
                     _selectedPlayer.StopPlay();
-                    _mainWindow.ShowMessage($"已停止選中區域的播放");
+                    
+                    // 確保清除回放模式狀態
+                    _selectedPlayer.SetPlaybackMode(false);
+                    
+                    _mainWindow.ShowMessage($"已停止分割區域 {_selectedPlayer.Index + 1} 的播放");
                     return true;
                 }
                 catch (Exception ex)
                 {
-                    _mainWindow.ShowMessage($"停止選中區域播放失敗: {ex.Message}");
+                    _mainWindow.ShowMessage($"停止分割區域 {_selectedPlayer.Index + 1} 播放失敗: {ex.Message}");
                     return false;
                 }
             }
-            return false;
+            else
+            {
+                _mainWindow.ShowMessage("❌ 沒有選中的分割區域");
+                return false;
+            }
         }
 
         /// <summary>

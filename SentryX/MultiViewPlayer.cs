@@ -99,9 +99,9 @@ namespace SentryX
         public event Action<MultiViewPlayer>? DoubleClicked;
 
         /// <summary>
-        /// 正常邊框顏色（灰色分割線）
+        /// 正常邊框顏色（極深灰色，幾乎看不見）
         /// </summary>
-        private static readonly Color NormalBorderColor = Color.Gray;
+        private static readonly Color NormalBorderColor = Color.FromArgb(24, 24, 24);
 
         /// <summary>
         /// 選中時的邊框顏色（紅色）

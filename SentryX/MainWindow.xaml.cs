@@ -220,18 +220,26 @@ namespace SentryX
             {
                 ShowMessage("⚠️ 選中的分割區域正在回放模式，請選擇其他區域或先切換回實況模式");
                 
-                // 自動選擇下一個可用的播放器（不在回放模式且未播放）
-                var availablePlayer = _splitScreenManager.VideoPlayers
-                    .FirstOrDefault(p => !p.IsPlaying && !(_playbackControlManager?.IsInPlaybackMode(p.Index) ?? false));
-                
-                if (availablePlayer != null)
+                // 修正第 229 行：確保 _splitScreenManager 不為 null
+                if (_splitScreenManager != null)
                 {
-                    _splitScreenManager.SelectPlayer(availablePlayer);
-                    ShowMessage($"🔄 已自動選擇可用的分割區域：{availablePlayer.Index + 1}");
+                    var availablePlayer = _splitScreenManager.VideoPlayers
+                        ?.FirstOrDefault(p => !p.IsPlaying && !(_playbackControlManager?.IsInPlaybackMode(p.Index) ?? false));
+                    
+                    if (availablePlayer != null)
+                    {
+                        _splitScreenManager.SelectPlayer(availablePlayer);
+                        ShowMessage($"🔄 已自動選擇可用的分割區域：{availablePlayer.Index + 1}");
+                    }
+                    else
+                    {
+                        ShowMessage("❌ 沒有可用的分割區域，請停止某些播放或切換回實況模式");
+                        return;
+                    }
                 }
                 else
                 {
-                    ShowMessage("❌ 沒有可用的分割區域，請停止某些播放或切換回實況模式");
+                    ShowMessage("❌ 分割畫面管理器未初始化");
                     return;
                 }
             }
@@ -292,7 +300,7 @@ namespace SentryX
                 // 檢查選中播放器是否在實況播放，如果是則停止實況
                 if (selectedPlayer.IsPlaying)
                 {
-                    if (_splitScreenManager.StopSelectedPlayer())
+                    if (_splitScreenManager != null && _splitScreenManager.StopSelectedPlayer())
                     {
                         ShowMessage($"🔄 已停止分割區域 {selectedPlayer.Index + 1} 的實況播放");
                         hasStoppedSomething = true;
@@ -393,7 +401,7 @@ namespace SentryX
                 _deviceListManager?.HandleDeviceSelection(selectedText);
             }
 
-            // 統一更新按鈕狀態
+            // 統一更新按鈑狀態
             UpdateButtonStates();
         }
 
@@ -595,8 +603,21 @@ namespace SentryX
                 bool hasSelectedDevice = !string.IsNullOrEmpty(_deviceListManager?.SelectedDeviceId);
                 bool hasSelectedPlayer = _splitScreenManager?.SelectedPlayer != null;
                 bool hasAnyPlaying = _splitScreenManager?.HasAnyPlayerPlaying() ?? false;
-                bool hasAnyPlayback = _playbackControlManager != null && 
-                    _splitScreenManager?.VideoPlayers.Any(p => _playbackControlManager.IsInPlaybackMode(p.Index)) == true;
+                
+                // 修正第 295 行：完全安全的 null 檢查
+                bool hasAnyPlayback = false;
+                if (_playbackControlManager != null && _splitScreenManager?.VideoPlayers != null)
+                {
+                    try
+                    {
+                        hasAnyPlayback = _splitScreenManager.VideoPlayers.Any(p => _playbackControlManager.IsInPlaybackMode(p.Index));
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"檢查回放狀態時發生錯誤: {ex.Message}");
+                        hasAnyPlayback = false;
+                    }
+                }
 
                 // 播放按鈕：需要選中設備和播放器
                 if (StartVideoButton != null)
@@ -608,11 +629,11 @@ namespace SentryX
                 if (StopVideoButton != null)
                 {
                     bool selectedPlayerHasContent = false;
-                    if (hasSelectedPlayer)
+                    if (hasSelectedPlayer && _splitScreenManager?.SelectedPlayer != null)
                     {
-                        var selectedPlayer = _splitScreenManager?.SelectedPlayer;
-                        selectedPlayerHasContent = selectedPlayer?.IsPlaying == true || 
-                            (_playbackControlManager?.IsInPlaybackMode(selectedPlayer?.Index ?? -1) ?? false);
+                        var selectedPlayer = _splitScreenManager.SelectedPlayer;
+                        selectedPlayerHasContent = selectedPlayer.IsPlaying || 
+                            (_playbackControlManager?.IsInPlaybackMode(selectedPlayer.Index) ?? false);
                     }
                     StopVideoButton.IsEnabled = selectedPlayerHasContent;
                 }
@@ -623,7 +644,7 @@ namespace SentryX
                     StopAllVideoButton.IsEnabled = hasAnyPlaying || hasAnyPlayback;
                 }
 
-                // 新增：調試信息，幫助了解按鈕狀態
+                // 調試信息，幫助了解按鈕狀態
                 Console.WriteLine($"按鈕狀態更新: 選中設備={hasSelectedDevice}, 選中播放器={hasSelectedPlayer}, " +
                     $"有播放={hasAnyPlaying}, 有回放={hasAnyPlayback}, " +
                     $"停止按鈕={StopVideoButton?.IsEnabled}, 全停按鈕={StopAllVideoButton?.IsEnabled}");

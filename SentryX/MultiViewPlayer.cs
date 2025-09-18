@@ -1,11 +1,12 @@
 ﻿// MultiViewPlayer.cs - 多視圖播放器 - 增強版本
-// 增加雙擊切換單/多分割畫面功能，並支援 IVS 控制
+// 增加雙擊切換單/多分割畫面功能
 
 using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.Windows.Forms;
 using System.Windows.Forms.Integration;
+using System.Runtime.InteropServices;
 
 namespace SentryX
 {
@@ -44,13 +45,13 @@ namespace SentryX
         /// <summary>
         /// 是否正在播放 - 修正版本，支援回放模式檢測
         /// </summary>
-        public bool IsPlaying 
-        { 
-            get 
+        public bool IsPlaying
+        {
+            get
             {
                 // 檢查實況播放
                 bool isLivePlaying = _videoPlayer?.IsPlaying ?? false;
-                
+
                 // 檢查回放模式（需要通過外部回放管理器檢查）
                 bool isInPlaybackMode = false;
                 try
@@ -63,9 +64,9 @@ namespace SentryX
                 {
                     // 如果檢查失敗，忽略錯誤
                 }
-                
+
                 return isLivePlaying || isInPlaybackMode;
-            } 
+            }
         }
 
         /// <summary>
@@ -132,7 +133,7 @@ namespace SentryX
         public PlaybackState? CurrentPlaybackState { get; private set; }
 
         /// <summary>
-        /// 是否被選中 - 修正版本
+        /// 🔥 統一的 IsSelected 屬性 - 加強調試和狀態管理
         /// </summary>
         public bool IsSelected
         {
@@ -141,8 +142,9 @@ namespace SentryX
             {
                 if (_isSelected != value)
                 {
+                    Debug.WriteLine($"MultiViewPlayer {Index}: 選中狀態變更 {_isSelected} -> {value}");
+                    
                     _isSelected = value;
-                    Debug.WriteLine($"MultiViewPlayer {Index}: 選中狀態變更為 {value}");
 
                     // 使用 BeginInvoke 確保在正確的線程上執行
                     if (_containerPanel?.InvokeRequired == true)
@@ -156,6 +158,13 @@ namespace SentryX
                 }
             }
         }
+
+        // Win32 API 聲明
+        [DllImport("user32.dll")]
+        private static extern bool InvalidateRect(IntPtr hWnd, IntPtr lpRect, bool bErase);
+
+        [DllImport("user32.dll")]
+        private static extern bool UpdateWindow(IntPtr hWnd);
 
         // === 建構子 ===
 
@@ -203,7 +212,7 @@ namespace SentryX
                 Child = _containerPanel
             };
 
-            Debug.WriteLine($"MultiViewPlayer {index} 已建立（增強版本，支援雙擊切換和 IVS 控制）");
+            Debug.WriteLine($"MultiViewPlayer {index} 已建立（增強版本，支援雙擊切換）");
         }
 
         // === 公開方法 ===
@@ -248,8 +257,13 @@ namespace SentryX
                 // 確保顯示狀態正確
                 EnsureProperDisplayState();
 
-                // 建立新的播放器 - 預設啟用 IVS
-                _videoPlayer = new SimpleVideoPlayer(decodeMode, streamType, enableIVSByDefault: true);
+                // 🔥 關鍵修正：根據解碼模式設定正確的 IVS 參數
+                bool enableIVS = (decodeMode == DecodeMode.Software); // 只有軟體解碼才啟用 IVS
+                
+                // 建立新的播放器
+                _videoPlayer = new SimpleVideoPlayer(decodeMode, streamType, enableIVS);
+                
+                Debug.WriteLine($"MultiViewPlayer {Index}: 創建播放器 - 解碼={decodeMode}, IVS={enableIVS}");
 
                 // 取得視頻面板的句handles
                 IntPtr windowHandle = _videoPanel.Handle;
@@ -263,7 +277,7 @@ namespace SentryX
                 if (_videoPlayer.StartPlay(deviceHandle, channel, windowHandle, deviceName))
                 {
                     HasActiveContent = true; // 標記為有活躍內容
-                    Debug.WriteLine($"MultiViewPlayer {Index}: 開始播放成功 {deviceName} 通道 {channel} ({streamType}), IVS: {_videoPlayer.IsIVSRenderEnabled}");
+                    Debug.WriteLine($"MultiViewPlayer {Index}: 開始播放成功 {deviceName} 通道 {channel} ({streamType})");
                     return true;
                 }
                 else
@@ -286,52 +300,7 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 新增：取得 SimpleVideoPlayer 實例 - 用於 IVS 控制
-        /// </summary>
-        /// <returns>SimpleVideoPlayer 實例，如果沒有播放則返回 null</returns>
-        public SimpleVideoPlayer? GetVideoPlayer()
-        {
-            return _videoPlayer;
-        }
-
-        /// <summary>
-        /// 新增：切換 IVS 顯示狀態
-        /// </summary>
-        /// <returns>切換後的狀態（true=啟用，false=停用），如果沒有播放器則返回 false</returns>
-        public bool ToggleIVSRender()
-        {
-            if (_videoPlayer != null)
-            {
-                return _videoPlayer.ToggleIVSRender();
-            }
-            return false;
-        }
-
-        /// <summary>
-        /// 新增：設定 IVS 顯示狀態
-        /// </summary>
-        /// <param name="enable">是否啟用 IVS 顯示</param>
-        /// <returns>是否成功設定</returns>
-        public bool SetIVSRender(bool enable)
-        {
-            if (_videoPlayer != null)
-            {
-                return _videoPlayer.SetIVSRender(enable);
-            }
-            return false;
-        }
-
-        /// <summary>
-        /// 新增：取得當前 IVS 顯示狀態
-        /// </summary>
-        /// <returns>true=啟用，false=停用或沒有播放器</returns>
-        public bool IsIVSRenderEnabled()
-        {
-            return _videoPlayer?.IsIVSRenderEnabled ?? false;
-        }
-
-        /// <summary>
-        /// 停止播放視頻 - 修正版本，保留播放狀態供恢復使用
+        /// 停止播放視頻 - 徹底修正版本，確保清除所有狀態
         /// </summary>
         /// <param name="keepPlaybackState">是否保留播放狀態（用於單/多分割切換）</param>
         public void StopPlay(bool keepPlaybackState = false)
@@ -354,9 +323,14 @@ namespace SentryX
                 {
                     CurrentPlaybackState = null;
                     HasActiveContent = false; // 清除活躍內容標記
+                    
+                    // 🔥 關鍵修正：停止播放時強制清除選中狀態
+                    // 特別是針對 IVS 規則導致的選中狀態殘留問題
+                    Debug.WriteLine($"MultiViewPlayer {Index}: 強制清除選中狀態（之前狀態: {_isSelected}）");
+                    _isSelected = false;
                 }
 
-                // 完全重置顯示狀態
+                // 🔥 重要：完全重置顯示狀態時不保持選中狀態
                 CompletelyResetDisplayState();
 
                 Debug.WriteLine($"MultiViewPlayer {Index}: 播放已停止並完全重置狀態");
@@ -396,8 +370,7 @@ namespace SentryX
                 CurrentPlaybackState.Channel,
                 CurrentPlaybackState.DecodeMode,
                 CurrentPlaybackState.StreamType,
-                CurrentPlaybackState.DeviceName,
-                CurrentPlaybackState.DeviceId
+                CurrentPlaybackState.DeviceName
             );
         }
 
@@ -441,6 +414,61 @@ namespace SentryX
         /// </summary>
         public int? Channel => CurrentPlaybackState?.Channel;
 
+        /// <summary>
+        /// 🔥 新增：取得 SimpleVideoPlayer 實例
+        /// </summary>
+        public SimpleVideoPlayer? GetVideoPlayer()
+        {
+            return _videoPlayer;
+        }
+
+        /// <summary>
+        /// 🔥 新增：取得當前 IVS 顯示狀態
+        /// </summary>
+        public bool IsIVSRenderEnabled => _videoPlayer?.IsIVSRenderEnabled ?? false;
+
+        /// <summary>
+        /// 🔥 新增：檢查是否支援 IVS
+        /// </summary>
+        public bool IsIVSSupported()
+        {
+            return _videoPlayer?.IsIVSSupported() ?? false;
+        }
+
+        /// <summary>
+        /// 🔥 新增：強制清除選中狀態 - 專門解決 IVS 規則殘留問題
+        /// </summary>
+        public void ForceClearSelectedState()
+        {
+            try
+            {
+                Debug.WriteLine($"MultiViewPlayer {Index}: 強制清除選中狀態");
+                
+                _isSelected = false;
+                
+                // 立即更新邊框顏色為正常狀態
+                if (_containerPanel != null)
+                {
+                    _containerPanel.BackColor = NormalBorderColor;
+                }
+                
+                // 確保視頻面板為黑色
+                if (_videoPanel != null)
+                {
+                    _videoPanel.BackColor = Color.Black;
+                }
+                
+                // 強制重繪
+                UpdateBorderColor();
+                
+                Debug.WriteLine($"MultiViewPlayer {Index}: 選中狀態已強制清除");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"MultiViewPlayer {Index}: 強制清除選中狀態時發生異常 - {ex.Message}");
+            }
+        }
+
         // === 私有方法 ===
 
         /// <summary>
@@ -458,8 +486,17 @@ namespace SentryX
         {
             if (e.Button == MouseButtons.Left)
             {
-                Selected?.Invoke(this);
-                Debug.WriteLine($"MultiViewPlayer {Index}: 被點擊選中 (容器)");
+                // 🔥 關鍵修正：檢查是否為真實的用戶點擊
+                // 防止 IVS 渲染過程觸發的虛假事件
+                if (IsRealUserClick(e))
+                {
+                    Selected?.Invoke(this);
+                    Debug.WriteLine($"MultiViewPlayer {Index}: 被點擊選中 (容器) - 真實用戶點擊");
+                }
+                else
+                {
+                    Debug.WriteLine($"MultiViewPlayer {Index}: 忽略非用戶觸發的點擊事件 (可能是 IVS 渲染)");
+                }
             }
         }
 
@@ -482,8 +519,17 @@ namespace SentryX
         {
             if (e.Button == MouseButtons.Left)
             {
-                Selected?.Invoke(this);
-                Debug.WriteLine($"MultiViewPlayer {Index}: 被點擊選中 (視頻區域)");
+                // 🔥 關鍵修正：檢查是否為真實的用戶點擊
+                // 防止 IVS 渲染過程觸發的虛假事件
+                if (IsRealUserClick(e))
+                {
+                    Selected?.Invoke(this);
+                    Debug.WriteLine($"MultiViewPlayer {Index}: 被點擊選中 (視頻區域) - 真實用戶點擊");
+                }
+                else
+                {
+                    Debug.WriteLine($"MultiViewPlayer {Index}: 忽略非用戶觸發的點擊事件 (可能是 IVS 渲染)");
+                }
             }
         }
 
@@ -551,7 +597,7 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 完全重置顯示狀態 - 強化版本
+        /// 完全重置顯示狀態 - 徹底修正版本，強制清除選中狀態
         /// </summary>
         private void CompletelyResetDisplayState()
         {
@@ -568,8 +614,9 @@ namespace SentryX
                     // 第2步：強制重設視頻面板為黑色背景
                     _videoPanel.BackColor = Color.Black;
 
-                    // 第3步：重設容器面板顏色（根據選中狀態）
-                    _containerPanel.BackColor = _isSelected ? SelectedBorderColor : NormalBorderColor;
+                    // 🔥 第3步：重要修正 - 強制設為非選中狀態，不依賴 _isSelected
+                    // 這解決了 IVS 規則導致的選中狀態殘留問題
+                    _containerPanel.BackColor = NormalBorderColor;
 
                     // 第4步：使用多種方法清除顯示內容
                     if (_videoPanel.IsHandleCreated)
@@ -602,7 +649,7 @@ namespace SentryX
                         _containerPanel.Parent.Update();
                     }
 
-                    Debug.WriteLine($"MultiViewPlayer {Index}: 顯示狀態已完全重置");
+                    Debug.WriteLine($"MultiViewPlayer {Index}: 顯示狀態已完全重置，強制清除選中邊框");
                 }
             }
             catch (Exception ex)
@@ -612,7 +659,7 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 更新邊框顏色 - 修正版本
+        /// 更新邊框顏色 - 修正版本，加強調試
         /// </summary>
         private void UpdateBorderColor()
         {
@@ -620,13 +667,15 @@ namespace SentryX
             {
                 if (_containerPanel == null || _videoPanel == null) return;
 
+                var targetColor = _isSelected ? SelectedBorderColor : NormalBorderColor;
+                
                 // 只更新容器面板的背景顏色（這會成為邊框顏色）
-                _containerPanel.BackColor = _isSelected ? SelectedBorderColor : NormalBorderColor;
+                _containerPanel.BackColor = targetColor;
 
                 // 確保視頻面板始終為黑色
                 _videoPanel.BackColor = Color.Black;
 
-                Debug.WriteLine($"MultiViewPlayer {Index}: 邊框顏色已更新，選中狀態: {_isSelected}");
+                Debug.WriteLine($"MultiViewPlayer {Index}: 邊框顏色已更新 - 選中狀態: {_isSelected}, 顏色: {(_isSelected ? "紅色" : "深灰色")}");
             }
             catch (Exception ex)
             {
@@ -634,22 +683,18 @@ namespace SentryX
             }
         }
 
-        // Win32 API 聲明
-        [System.Runtime.InteropServices.DllImport("user32.dll")]
-        private static extern bool InvalidateRect(IntPtr hWnd, IntPtr lpRect, bool bErase);
-
-        [System.Runtime.InteropServices.DllImport("user32.dll")]
-        private static extern bool UpdateWindow(IntPtr hWnd);
-
-        // === IDisposable 實作 ===
-
         /// <summary>
-        /// 釋放資源
+        /// 🔥 修正：Dispose 方法 - 確保完全清除選中狀態
         /// </summary>
         public void Dispose()
         {
             if (!_disposed)
             {
+                Debug.WriteLine($"MultiViewPlayer {Index}: 開始釋放資源");
+                
+                // 🔥 釋放前先強制清除選中狀態
+                ForceClearSelectedState();
+                
                 StopPlay(); // 完全停止，清除播放狀態
 
                 // 移除事件處理器
@@ -672,6 +717,115 @@ namespace SentryX
 
                 _disposed = true;
                 Debug.WriteLine($"MultiViewPlayer {Index} 已釋放");
+            }
+        }
+
+        /// <summary>
+        /// 🔥 新增：檢查是否為真實的用戶點擊 - 防止 IVS 渲染觸發虛假事件
+        /// </summary>
+        private bool IsRealUserClick(MouseEventArgs e)
+        {
+            try
+            {
+                // 檢查 1：確保滑鼠位置在合理範圍內
+                if (e.X < 0 || e.Y < 0 || e.X > _videoPanel.Width || e.Y > _videoPanel.Height)
+                {
+                    return false;
+                }
+
+                // 檢查 2：檢查是否在播放啟動後的短時間內（IVS 渲染通常在啟動時觸發）
+                if (_videoPlayer?.IsPlaying == true)
+                {
+                    var timeSinceStart = DateTime.Now - (_videoPlayer.CurrentVideoInfo?.StartTime ?? DateTime.Now);
+                    if (timeSinceStart.TotalSeconds < 2.0) // 播放開始後 2 秒內，更謹慎處理點擊事件
+                    {
+                        Debug.WriteLine($"播放啟動後 {timeSinceStart.TotalSeconds:F1} 秒內的點擊，可能是 IVS 渲染觸發");
+                        
+                        // 在這個時間窗口內，需要更嚴格的驗證
+                        // 檢查是否有真實的滑鼠光標位置
+                        var cursorPos = Cursor.Position;
+                        var panelPos = _videoPanel.PointToScreen(Point.Empty);
+                        var relativeCursor = new Point(cursorPos.X - panelPos.X, cursorPos.Y - panelPos.Y);
+                        
+                        // 如果事件位置與實際光標位置差距太大，可能是虛假事件
+                        var distance = Math.Sqrt(Math.Pow(e.X - relativeCursor.X, 2) + Math.Pow(e.Y - relativeCursor.Y, 2));
+                        if (distance > 50) // 距離超過 50 像素認為是虛假事件
+                        {
+                            Debug.WriteLine($"事件位置 ({e.X}, {e.Y}) 與光標位置 ({relativeCursor.X}, {relativeCursor.Y}) 差距太大: {distance:F1}px");
+                            return false;
+                        }
+                    }
+                }
+
+                // 檢查 3：確保不是在 IVS 切換過程中
+                if (_videoPlayer?.IsIVSSupported() == true && _videoPlayer.IsIVSRenderEnabled)
+                {
+                    // 如果正在進行 IVS 相關操作，短暫延遲處理點擊事件
+                    var lastIVSUpdate = GetLastIVSUpdateTime();
+                    if (lastIVSUpdate.HasValue && (DateTime.Now - lastIVSUpdate.Value).TotalMilliseconds < 500)
+                    {
+                        Debug.WriteLine("IVS 更新後 500ms 內的點擊事件，可能是渲染觸發");
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"檢查真實點擊時發生異常: {ex.Message}");
+                return true; // 異常時默認為真實點擊
+            }
+        }
+
+        /// <summary>
+        /// 🔥 新增：記錄和取得最後一次 IVS 更新時間
+        /// </summary>
+        private DateTime? _lastIVSUpdateTime = null;
+        private DateTime? GetLastIVSUpdateTime() => _lastIVSUpdateTime;
+        private void UpdateLastIVSUpdateTime() => _lastIVSUpdateTime = DateTime.Now;
+
+        /// <summary>
+        /// 🔥 修正：設定 IVS 顯示狀態 - 加入時間記錄
+        /// </summary>
+        public bool SetIVSRender(bool enable)
+        {
+            try
+            {
+                UpdateLastIVSUpdateTime(); // 記錄 IVS 更新時間
+                
+                bool result = _videoPlayer?.SetIVSRender(enable) ?? false;
+                
+                Debug.WriteLine($"MultiViewPlayer {Index}: IVS 設定為 {enable}, 結果: {result}");
+                
+                return result;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"MultiViewPlayer {Index}: 設定 IVS 時發生異常 - {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 🔥 修正：切換 IVS 顯示狀態 - 加入時間記錄
+        /// </summary>
+        public bool ToggleIVSRender()
+        {
+            try
+            {
+                UpdateLastIVSUpdateTime(); // 記錄 IVS 更新時間
+                
+                bool result = _videoPlayer?.ToggleIVSRender() ?? false;
+                
+                Debug.WriteLine($"MultiViewPlayer {Index}: IVS 切換結果: {result}");
+                
+                return result;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"MultiViewPlayer {Index}: 切換 IVS 時發生異常 - {ex.Message}");
+                return false;
             }
         }
     }

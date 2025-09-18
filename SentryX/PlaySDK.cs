@@ -9,8 +9,8 @@ namespace SentryX
     /// </summary>
     public static class PlaySDK
     {
-        // DLL 名稱（確保這個檔案在你的專案中）
-        private const string DLL_NAME = "play.dll";
+        // 🔥 修正：使用正確的 DLL 名稱
+        private const string DLL_NAME = "Play.dll"; // 大部分大華 SDK 使用這個名稱
 
         // === 基本控制函數 ===
 
@@ -54,7 +54,7 @@ namespace SentryX
         /// 設置解碼和渲染引擎
         /// </summary>
         [DllImport(DLL_NAME)]
-        public static extern bool PLAY_SetEngine(int port, DecodeType decodeType, RenderType renderType);
+        public static extern bool PLAY_SetEngine(int port, uint decodeType, uint renderType);
 
         /// <summary>
         /// 開啟串流
@@ -101,40 +101,35 @@ namespace SentryX
         // === 常數定義 ===
 
         /// <summary>
-        /// 實時串流模式
-        /// </summary>
-        public const uint STREAME_REALTIME = 0;
-
-        /// <summary>
-        /// 文件播放模式
-        /// </summary>
-        public const uint STREAME_FILE = 1;
-
-        /// <summary>
         /// 緩衝區溢出錯誤
         /// </summary>
-        public const uint PLAY_BUF_OVER = 40;
+        public const uint PLAY_BUF_OVER = 0x16; // 緩衝區滿
 
+        /// <summary>
+        /// 實時串流模式
+        /// </summary>
+        public const uint STREAME_REALTIME = 0; // 即時串流模式
+        
         // === 枚舉定義 ===
 
         /// <summary>
-        /// 解碼類型
+        /// 解碼類型 - 修正為 uint 類型
         /// </summary>
-        public enum DecodeType
+        public enum DecodeType : uint
         {
-            DECODE_SW = 1,              // 軟體解碼
-            DECODE_HW = 2,              // 硬體解碼
-            DECODE_HW_FAST = 3          // 快速硬體解碼
+            DECODE_SW = 0,              // 軟體解碼
+            DECODE_HW = 1,              // 硬體解碼
+            DECODE_HW_FAST = 2          // 快速硬體解碼
         }
 
         /// <summary>
-        /// 渲染類型
+        /// 渲染類型 - 修正為 uint 類型
         /// </summary>
-        public enum RenderType
+        public enum RenderType : uint
         {
-            RENDER_GDI = 1,             // GDI 渲染
-            RENDER_D3D = 3,             // D3D9 渲染
-            RENDER_D3D11 = 7            // D3D11 渲染
+            RENDER_GDI = 0,             // GDI 渲染
+            RENDER_D3D = 1,             // DirectX 9
+            RENDER_D3D11 = 2            // DirectX 11
         }
     }
 }

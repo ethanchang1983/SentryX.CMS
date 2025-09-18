@@ -50,6 +50,8 @@ namespace SentryX
             if (_mainWindow.DecodeTypeComboBox == null) missingComponents.Add("DecodeTypeComboBox");
             if (_mainWindow.StatusTextBlock == null) missingComponents.Add("StatusTextBlock");
             if (_mainWindow.StatusScrollViewer == null) missingComponents.Add("StatusScrollViewer");
+            // 🔥 新增：IVS 按鈕驗證
+            if (_mainWindow.IVSToggleButton == null) missingComponents.Add("IVSToggleButton");
 
             if (missingComponents.Count > 0)
             {
@@ -69,8 +71,9 @@ namespace SentryX
 
             _mainWindow.ShowMessage("✅ 系統啟動完成，SDK 已就緒");
             _mainWindow.ShowMessage("💡 點擊「設備管理」開始添加攝影機");
-            _mainWindow.ShowMessage("🔧 預設解碼模式已設為 CPU 軟體解碼（相容性最佳）");
+            _mainWindow.ShowMessage("🔧 預設解碼模式已設為 CPU 軟體解碼（支援 IVS）");
             _mainWindow.ShowMessage("📡 預設碼流類型已設為主碼流（高畫質）");
+            _mainWindow.ShowMessage("🎯 軟體解碼模式支援 IVS 智能分析規則顯示");
             _mainWindow.ShowMessage("🖱️ 點擊分割區域選中，雙擊設備通道加入選中區域");
         }
 

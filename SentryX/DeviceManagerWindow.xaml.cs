@@ -562,19 +562,113 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 從搜尋結果填入設備詳情
+        /// 儲存並自動連接設備
+        /// </summary>
+        private void SaveDeviceButton_Click(object sender, RoutedEventArgs e)
+        {
+            // 驗證輸入
+            if (!ValidateInput())
+            {
+                return;
+            }
+
+            // 建立設備資訊
+            var deviceInfo = new DeviceInfo
+            {
+                Name = DeviceNameTextBox.Text.Trim(),
+                IpAddress = DeviceIPTextBox.Text.Trim(),
+                Port = int.Parse(DevicePortTextBox.Text),
+                Username = UsernameTextBox.Text.Trim(),
+                Password = PasswordBox.Password
+            };
+
+            SaveDeviceButton.IsEnabled = false; // 防止重複點擊
+
+            try
+            {
+                bool isNewDevice = true;
+
+                // 修正：檢查是否是編輯現有設備 - 使用 IP:Port 組合檢查
+                if (_selectedDevice != null && _selectedDevice.MatchesAddress(deviceInfo.IpAddress, deviceInfo.Port))
+                {
+                    // 更新現有設備
+                    _selectedDevice.Name = deviceInfo.Name;
+                    _selectedDevice.Port = deviceInfo.Port;
+                    _selectedDevice.Username = deviceInfo.Username;
+                    _selectedDevice.Password = deviceInfo.Password;
+
+                    AddStatusMessage($"設備 {deviceInfo.Name} 資訊已更新");
+                    isNewDevice = false;
+                    deviceInfo = _selectedDevice; // 使用現有設備對象
+                }
+                else
+                {
+                    // 新增前檢查：是否已存在相同 IP:Port 組合
+                    if (DahuaSDK.IsDeviceExists(deviceInfo.IpAddress, deviceInfo.Port))
+                    {
+                        AddStatusMessage($"❌ 設備 {deviceInfo.IpAddress}:{deviceInfo.Port} 已存在！");
+                        MessageBox.Show($"設備 {deviceInfo.IpAddress}:{deviceInfo.Port} 已經存在！\n\n" +
+                                      "如果您要添加相同 IP 的不同設備，請使用不同的 Port。",
+                                      "設備重複", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        return;
+                    }
+
+                    // 添加新設備
+                    if (!DahuaSDK.AddDevice(deviceInfo))
+                    {
+                        return; // 添加失敗，錯誤訊息已由 SDK 處理
+                    }
+
+                    _deviceCollection.Add(deviceInfo);
+                    AddStatusMessage($"新設備 {deviceInfo.Name} ({deviceInfo.IpAddress}:{deviceInfo.Port}) 已添加");
+                }
+
+                // 自動嘗試連接設備
+                AddStatusMessage($"正在自動連接設備 {deviceInfo.Name}...");
+
+                bool connectResult = DahuaSDK.ConnectDevice(deviceInfo.Id);
+
+                if (connectResult)
+                {
+                    AddStatusMessage($"設備 {deviceInfo.Name} 儲存並連接成功！");
+
+                    // 連接成功後清空輸入欄位，準備下一個設備
+                    if (isNewDevice)
+                    {
+                        ClearInputFields();
+                    }
+                }
+                else
+                {
+                    AddStatusMessage($"設備 {deviceInfo.Name} 已儲存，但連接失敗，請檢查網路和設備狀態");
+                }
+            }
+            catch (Exception ex)
+            {
+                AddStatusMessage($"儲存設備時發生錯誤: {ex.Message}");
+                MessageBox.Show($"儲存設備時發生錯誤：\n{ex.Message}",
+                               "錯誤", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally
+            {
+                SaveDeviceButton.IsEnabled = true;
+            }
+        }
+
+        /// <summary>
+        /// 修正：從搜尋結果填入設備詳情 - 使用 IP:Port 格式
         /// </summary>
         private void FillFromSearchResult()
         {
             if (_selectedSearchResult == null) return;
 
-            DeviceNameTextBox.Text = $"{_selectedSearchResult.DeviceType}-{_selectedSearchResult.IP}";
+            DeviceNameTextBox.Text = $"{_selectedSearchResult.DeviceType}-{_selectedSearchResult.IP}:{_selectedSearchResult.Port}";
             DeviceIPTextBox.Text = _selectedSearchResult.IP;
             DevicePortTextBox.Text = _selectedSearchResult.Port.ToString();
             UsernameTextBox.Text = "admin";
             PasswordBox.Password = "123456";
 
-            AddStatusMessage($"已從搜尋結果填入設備資訊: {_selectedSearchResult.IP}");
+            AddStatusMessage($"已從搜尋結果填入設備資訊: {_selectedSearchResult.IP}:{_selectedSearchResult.Port}");
             DeviceNameTextBox.Focus();
         }
 
@@ -700,91 +794,6 @@ namespace SentryX
 
             AddStatusMessage($"正在登出設備: {_selectedDevice.Name}...");
             DahuaSDK.DisconnectDevice(_selectedDevice.Id);
-        }
-
-        /// <summary>
-        /// 儲存並自動連接設備
-        /// </summary>
-        private void SaveDeviceButton_Click(object sender, RoutedEventArgs e)
-        {
-            // 驗證輸入
-            if (!ValidateInput())
-            {
-                return;
-            }
-
-            // 建立設備資訊
-            var deviceInfo = new DeviceInfo
-            {
-                Name = DeviceNameTextBox.Text.Trim(),
-                IpAddress = DeviceIPTextBox.Text.Trim(),
-                Port = int.Parse(DevicePortTextBox.Text),
-                Username = UsernameTextBox.Text.Trim(),
-                Password = PasswordBox.Password,
-                Id = DeviceIPTextBox.Text.Trim()
-            };
-
-            SaveDeviceButton.IsEnabled = false; // 防止重複點擊
-
-            try
-            {
-                bool isNewDevice = true;
-
-                // 檢查是否是編輯現有設備
-                if (_selectedDevice != null && _selectedDevice.IpAddress == deviceInfo.IpAddress)
-                {
-                    // 更新現有設備
-                    _selectedDevice.Name = deviceInfo.Name;
-                    _selectedDevice.Port = deviceInfo.Port;
-                    _selectedDevice.Username = deviceInfo.Username;
-                    _selectedDevice.Password = deviceInfo.Password;
-
-                    AddStatusMessage($"設備 {deviceInfo.Name} 資訊已更新");
-                    isNewDevice = false;
-                    deviceInfo = _selectedDevice; // 使用現有設備對象
-                }
-                else
-                {
-                    // 添加新設備
-                    if (!DahuaSDK.AddDevice(deviceInfo))
-                    {
-                        return; // 添加失敗，錯誤訊息已由 SDK 處理
-                    }
-
-                    _deviceCollection.Add(deviceInfo);
-                    AddStatusMessage($"新設備 {deviceInfo.Name} 已添加");
-                }
-
-                // 自動嘗試連接設備
-                AddStatusMessage($"正在自動連接設備 {deviceInfo.Name}...");
-
-                bool connectResult = DahuaSDK.ConnectDevice(deviceInfo.Id);
-
-                if (connectResult)
-                {
-                    AddStatusMessage($"設備 {deviceInfo.Name} 儲存並連接成功！");
-
-                    // 連接成功後清空輸入欄位，準備下一個設備
-                    if (isNewDevice)
-                    {
-                        ClearInputFields();
-                    }
-                }
-                else
-                {
-                    AddStatusMessage($"設備 {deviceInfo.Name} 已儲存，但連接失敗，請檢查網路和設備狀態");
-                }
-            }
-            catch (Exception ex)
-            {
-                AddStatusMessage($"儲存設備時發生錯誤: {ex.Message}");
-                MessageBox.Show($"儲存設備時發生錯誤：\n{ex.Message}",
-                               "錯誤", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-            finally
-            {
-                SaveDeviceButton.IsEnabled = true;
-            }
         }
 
         /// <summary>

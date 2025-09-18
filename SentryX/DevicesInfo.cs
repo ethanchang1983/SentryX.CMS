@@ -3,14 +3,16 @@ using System;
 
 namespace SentryX
 {
-
     /// <summary>
     /// 設備資訊類別 - 儲存每個設備的完整資訊
     /// </summary>
     public class DeviceInfo
     {
+        private string _ipAddress = "";
+        private int _port = 37777;
+
         /// <summary>
-        /// 設備唯一識別碼 (通常用 IP)
+        /// 設備唯一識別碼 (使用 IP:Port 格式)
         /// </summary>
         public string Id { get; set; } = "";
 
@@ -22,12 +24,28 @@ namespace SentryX
         /// <summary>
         /// 設備 IP 地址
         /// </summary>
-        public string IpAddress { get; set; } = "";
+        public string IpAddress 
+        { 
+            get => _ipAddress;
+            set
+            {
+                _ipAddress = value;
+                UpdateDeviceId(); // 自動更新 ID
+            }
+        }
 
         /// <summary>
         /// 設備連接埠 (預設 37777)
         /// </summary>
-        public int Port { get; set; } = 37777;
+        public int Port 
+        { 
+            get => _port;
+            set
+            {
+                _port = value;
+                UpdateDeviceId(); // 自動更新 ID
+            }
+        }
 
         /// <summary>
         /// 登入帳號
@@ -69,20 +87,39 @@ namespace SentryX
         /// </summary>
         public DeviceInfo()
         {
-            // 使用 IP 作為預設的 ID
-            Id = IpAddress;
+            UpdateDeviceId();
         }
 
         /// <summary>
         /// 便利建構子 - 快速建立設備
         /// </summary>
-        public DeviceInfo(string name, string ip, string username = "admin", string password = "123456")
+        public DeviceInfo(string name, string ip, int port = 37777, string username = "admin", string password = "123456")
         {
             Name = name;
-            IpAddress = ip;
-            Id = ip; // 使用 IP 作為 ID
+            _ipAddress = ip;
+            _port = port;
             Username = username;
             Password = password;
+            UpdateDeviceId();
+        }
+
+        /// <summary>
+        /// 🔥 更新設備唯一識別碼 - 使用 IP:Port 格式
+        /// </summary>
+        private void UpdateDeviceId()
+        {
+            if (!string.IsNullOrEmpty(_ipAddress))
+            {
+                Id = $"{_ipAddress}:{_port}";
+            }
+        }
+
+        /// <summary>
+        /// 🔥 手動設定 ID（用於向後相容）
+        /// </summary>
+        public void SetId(string customId)
+        {
+            Id = customId;
         }
 
         /// <summary>
@@ -91,13 +128,18 @@ namespace SentryX
         public override string ToString()
         {
             var status = IsOnline ? "🟢" : "🔴";
-            return $"{status} {Name} ({IpAddress})";
+            return $"{status} {Name} ({IpAddress}:{Port})";
         }
 
         /// <summary>
         /// 狀態顯示文字
         /// </summary>
         public string StatusDisplay => IsOnline ? "🟢 在線" : "🔴 離線";
+
+        /// <summary>
+        /// 🔥 取得設備的簡短顯示名稱
+        /// </summary>
+        public string DisplayName => $"{Name} ({IpAddress}:{Port})";
 
         /// <summary>
         /// 複製設備資訊
@@ -108,8 +150,8 @@ namespace SentryX
             {
                 Id = this.Id,
                 Name = this.Name,
-                IpAddress = this.IpAddress,
-                Port = this.Port,
+                _ipAddress = this._ipAddress,
+                _port = this._port,
                 Username = this.Username,
                 Password = this.Password,
                 IsOnline = this.IsOnline,
@@ -118,6 +160,24 @@ namespace SentryX
                 SerialNumber = this.SerialNumber,
                 ChannelCount = this.ChannelCount
             };
+        }
+
+        /// <summary>
+        /// 🔥 檢查兩個設備是否為同一個（IP 和 Port 都相同）
+        /// </summary>
+        public bool IsSameDevice(DeviceInfo other)
+        {
+            return other != null && 
+                   this.IpAddress == other.IpAddress && 
+                   this.Port == other.Port;
+        }
+
+        /// <summary>
+        /// 🔥 檢查是否與指定的 IP 和 Port 匹配
+        /// </summary>
+        public bool MatchesAddress(string ip, int port)
+        {
+            return this.IpAddress == ip && this.Port == port;
         }
     }
 }

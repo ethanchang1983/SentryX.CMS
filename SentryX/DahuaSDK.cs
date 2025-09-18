@@ -65,7 +65,7 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 添加設備到管理清單 (但不連接)
+        /// 添加設備到管理清單 (但不連接) - 🔥 修正版本，支援相同 IP 不同 Port
         /// </summary>
         public static bool AddDevice(DeviceInfo deviceInfo)
         {
@@ -75,16 +75,28 @@ namespace SentryX
                 return false;
             }
 
-            // 檢查是否已經存在
+            // 🔥 使用新的 ID 格式檢查重複（IP:Port）
+            var deviceId = $"{deviceInfo.IpAddress}:{deviceInfo.Port}";
+            deviceInfo.SetId(deviceId); // 確保 ID 正確設定
+
+            // 檢查是否已經存在相同的 IP:Port 組合
             if (_devices.ContainsKey(deviceInfo.Id))
             {
-                StatusMessage?.Invoke($"⚠ 設備 {deviceInfo.IpAddress} 已存在");
+                StatusMessage?.Invoke($"⚠ 設備 {deviceInfo.IpAddress}:{deviceInfo.Port} 已存在");
+                return false;
+            }
+
+            // 🔥 額外檢查：是否有相同 IP:Port 但不同 ID 的設備
+            var existingDevice = _devices.Values.FirstOrDefault(d => d.MatchesAddress(deviceInfo.IpAddress, deviceInfo.Port));
+            if (existingDevice != null)
+            {
+                StatusMessage?.Invoke($"⚠ 設備 {deviceInfo.IpAddress}:{deviceInfo.Port} 已存在（ID: {existingDevice.Id}）");
                 return false;
             }
 
             // 添加到設備清單
             _devices[deviceInfo.Id] = deviceInfo;
-            StatusMessage?.Invoke($"✅ 已添加設備 {deviceInfo.Name} ({deviceInfo.IpAddress})");
+            StatusMessage?.Invoke($"✅ 已添加設備 {deviceInfo.Name} ({deviceInfo.IpAddress}:{deviceInfo.Port})");
 
             // 通知 UI 更新
             DeviceStatusChanged?.Invoke(deviceInfo);
@@ -313,6 +325,22 @@ namespace SentryX
         }
 
         /// <summary>
+        /// 🔥 新增：根據 IP 和 Port 查找設備
+        /// </summary>
+        public static DeviceInfo? GetDeviceByAddress(string ipAddress, int port)
+        {
+            return _devices.Values.FirstOrDefault(d => d.MatchesAddress(ipAddress, port));
+        }
+
+        /// <summary>
+        /// 🔥 新增：檢查指定地址是否已存在設備
+        /// </summary>
+        public static bool IsDeviceExists(string ipAddress, int port)
+        {
+            return _devices.Values.Any(d => d.MatchesAddress(ipAddress, port));
+        }
+
+        /// <summary>
         /// 清理所有資源
         /// </summary>
         public static void Cleanup()
@@ -340,28 +368,32 @@ namespace SentryX
         {
             if (string.IsNullOrEmpty(deviceIP)) return;
 
-            var device = _devices.Values.FirstOrDefault(d => d.IpAddress == deviceIP);
-            if (device != null)
+            // 尋找所有匹配 IP 的設備（可能有多個不同 Port）
+            var matchingDevices = _devices.Values.Where(d => d.IpAddress == deviceIP).ToList();
+            
+            foreach (var device in matchingDevices)
             {
                 device.IsOnline = false;
-                StatusMessage?.Invoke($"⚠ 設備 {device.Name} ({deviceIP}) 已斷線");
+                StatusMessage?.Invoke($"⚠ 設備 {device.Name} ({deviceIP}:{device.Port}) 已斷線");
                 DeviceStatusChanged?.Invoke(device);
             }
         }
 
         /// <summary>
-        /// 處理設備重連事件
+        /// 🔥 修正：處理設備重連事件 - 使用 IP:Port 查找
         /// </summary>
         private static void OnDeviceReconnected(string? deviceIP)
         {
             if (string.IsNullOrEmpty(deviceIP)) return;
 
-            var device = _devices.Values.FirstOrDefault(d => d.IpAddress == deviceIP);
-            if (device != null)
+            // 尋找所有匹配 IP 的設備（可能有多個不同 Port）
+            var matchingDevices = _devices.Values.Where(d => d.IpAddress == deviceIP).ToList();
+            
+            foreach (var device in matchingDevices)
             {
                 device.IsOnline = true;
                 device.LastConnectTime = DateTime.Now;
-                StatusMessage?.Invoke($"✅ 設備 {device.Name} ({deviceIP}) 已重新連接");
+                StatusMessage?.Invoke($"✅ 設備 {device.Name} ({deviceIP}:{device.Port}) 已重新連接");
                 DeviceStatusChanged?.Invoke(device);
             }
         }

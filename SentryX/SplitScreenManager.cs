@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
+using System.Diagnostics;
 
 namespace SentryX
 {
@@ -366,12 +367,18 @@ namespace SentryX
             }
         }
 
+        /// <summary>
+        /// 🔥 修正：停止所有視頻播放器 - 確保清除選中狀態
+        /// </summary>
         public void StopAllVideoPlayers()
         {
             foreach (var player in _videoPlayers)
             {
                 try
                 {
+                    // 🔥 先強制清除選中狀態，防止 IVS 規則殘留
+                    player.ForceClearSelectedState();
+                    
                     player.Selected -= OnPlayerSelected;
                     player.DoubleClicked -= OnPlayerDoubleClicked;
                     player.Dispose();
@@ -390,24 +397,25 @@ namespace SentryX
             _hiddenPlayers.Clear();
         }
 
-        private void ForceUpdateBorders()
+        /// <summary>
+        /// 🔥 新增：強制清除所有播放器的選中狀態 - 專門解決 IVS 問題
+        /// </summary>
+        public void ForceClearAllSelectedStates()
         {
-            _mainWindow.Dispatcher.BeginInvoke(new Action(() =>
+            try
             {
-                try
+                foreach (var player in _videoPlayers)
                 {
-                    foreach (var player in _videoPlayers)
-                    {
-                        var currentSelected = player.IsSelected;
-                        player.IsSelected = !currentSelected;
-                        player.IsSelected = currentSelected;
-                    }
+                    player.ForceClearSelectedState();
                 }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"強制邊框更新失敗: {ex.Message}");
-                }
-            }), System.Windows.Threading.DispatcherPriority.Background);
+                
+                _mainWindow.ShowMessage("已強制清除所有分割區域的選中狀態");
+                Debug.WriteLine("所有播放器的選中狀態已強制清除");
+            }
+            catch (Exception ex)
+            {
+                _mainWindow.ShowMessage($"清除選中狀態時發生錯誤: {ex.Message}");
+            }
         }
 
         /// <summary>
@@ -555,6 +563,26 @@ namespace SentryX
             int currentIndex = _selectedPlayer != null ? _videoPlayers.IndexOf(_selectedPlayer) : 0;
             int previousIndex = currentIndex == 0 ? _videoPlayers.Count - 1 : currentIndex - 1;
             SelectPlayer(_videoPlayers[previousIndex]);
+        }
+
+        private void ForceUpdateBorders()
+        {
+            _mainWindow.Dispatcher.BeginInvoke(new Action(() =>
+            {
+                try
+                {
+                    foreach (var player in _videoPlayers)
+                    {
+                        var currentSelected = player.IsSelected;
+                        player.IsSelected = !currentSelected;
+                        player.IsSelected = currentSelected;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"強制邊框更新失敗: {ex.Message}");
+                }
+            }), System.Windows.Threading.DispatcherPriority.Background);
         }
     }
 }

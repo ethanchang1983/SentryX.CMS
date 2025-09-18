@@ -780,5 +780,51 @@ namespace SentryX
                 base.OnClosed(e);
             }
         }
+
+        /// <summary>
+        /// PTZ控制按鈕點擊事件
+        /// </summary>
+        private void PTZControlButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                // 檢查是否有選中的播放器
+                var selectedPlayer = _splitScreenManager?.SelectedPlayer;
+                if (selectedPlayer == null)
+                {
+                    ShowMessage("❌ 請先選擇一個分割區域");
+                    return;
+                }
+
+                // 檢查播放器是否有正在播放的內容
+                if (!selectedPlayer.IsPlaying)
+                {
+                    ShowMessage("❌ 選中的分割區域沒有正在播放的視頻");
+                    return;
+                }
+
+                // 檢查是否有現有的PTZ控制視窗
+                foreach (Window window in System.Windows.Application.Current.Windows)
+                {
+                    if (window is PTZControlWindow existingPTZWindow)
+                    {
+                        existingPTZWindow.Activate();
+                        existingPTZWindow.WindowState = WindowState.Normal;
+                        ShowMessage("PTZ控制視窗已激活");
+                        return;
+                    }
+                }
+
+                // 創建新的PTZ控制視窗
+                var ptzWindow = new PTZControlWindow(this);
+                ptzWindow.Owner = this;
+                ptzWindow.Show();
+                ShowMessage("🎮 PTZ控制視窗已開啟");
+            }
+            catch (Exception ex)
+            {
+                ShowMessage($"❌ 開啟PTZ控制視窗失敗: {ex.Message}");
+            }
+        }
     }
 }

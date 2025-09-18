@@ -189,6 +189,87 @@ namespace SentryX
             }
         }
 
+        /// <summary>
+        /// 新增：IVS 畫線規則顯示切換按鈕點擊事件
+        /// </summary>
+        private void IVSToggleButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                // 檢查是否有選中的播放器
+                var selectedPlayer = _splitScreenManager?.SelectedPlayer;
+                if (selectedPlayer == null)
+                {
+                    ShowMessage("❌ 請先選擇一個分割區域");
+                    return;
+                }
+
+                // 檢查播放器是否有正在播放的內容
+                if (!selectedPlayer.IsPlaying)
+                {
+                    ShowMessage("❌ 選中的分割區域沒有正在播放的視頻，IVS 功能需要在播放狀態下使用");
+                    return;
+                }
+
+                // 從選中的播放器取得 SimpleVideoPlayer 實例
+                var videoPlayer = selectedPlayer.GetVideoPlayer();
+                if (videoPlayer == null)
+                {
+                    ShowMessage("❌ 無法取得視頻播放器實例");
+                    return;
+                }
+
+                // 切換 IVS 顯示狀態
+                bool newState = videoPlayer.ToggleIVSRender();
+                
+                // 更新按鈕顯示
+                UpdateIVSButtonDisplay(newState);
+
+                // 顯示狀態變更訊息
+                string statusMessage = newState ? "已啟用" : "已停用";
+                ShowMessage($"🎯 分割區域 {selectedPlayer.Index + 1} 的 IVS 畫線規則顯示{statusMessage}");
+
+                Console.WriteLine($"IVS 切換: 播放器 {selectedPlayer.Index + 1}, 新狀態: {newState}");
+            }
+            catch (Exception ex)
+            {
+                ShowMessage($"❌ 切換 IVS 顯示時發生錯誤: {ex.Message}");
+                Console.WriteLine($"IVSToggleButton_Click 異常: {ex}");
+            }
+        }
+
+        /// <summary>
+        /// 更新 IVS 按鈕的顯示狀態
+        /// </summary>
+        /// <param name="ivsEnabled">IVS 是否啟用</param>
+        private void UpdateIVSButtonDisplay(bool ivsEnabled)
+        {
+            try
+            {
+                if (IVSToggleButton != null)
+                {
+                    if (ivsEnabled)
+                    {
+                        IVSToggleButton.Content = "🎯 IVS開啟";
+                        IVSToggleButton.Background = new System.Windows.Media.SolidColorBrush(
+                            System.Windows.Media.Color.FromRgb(33, 150, 243)); // 藍色 #2196F3
+                        IVSToggleButton.ToolTip = "點擊關閉 IVS 智能分析畫線規則顯示";
+                    }
+                    else
+                    {
+                        IVSToggleButton.Content = "🎯 IVS關閉";
+                        IVSToggleButton.Background = new System.Windows.Media.SolidColorBrush(
+                            System.Windows.Media.Color.FromRgb(158, 158, 158)); // 灰色 #9E9E9E
+                        IVSToggleButton.ToolTip = "點擊開啟 IVS 智能分析畫線規則顯示";
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"更新 IVS 按鈕顯示時發生錯誤: {ex.Message}");
+            }
+        }
+
         private void QuickAddDeviceButton_Click(object sender, RoutedEventArgs e)
         {
             DeviceManagerButton_Click(sender, e);
@@ -593,7 +674,7 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 新增：統一管理所有按鈕狀態的方法 - 改為公開
+        /// 新增：統一管理所有按鈕狀態的方法 - 改為公開，並包含 IVS 按鈕狀態更新
         /// </summary>
         public void UpdateButtonStates()
         {
@@ -644,6 +725,9 @@ namespace SentryX
                     StopAllVideoButton.IsEnabled = hasAnyPlaying || hasAnyPlayback;
                 }
 
+                // 新增：IVS 按鈕狀態更新
+                UpdateIVSButtonState();
+
                 // 調試信息，幫助了解按鈕狀態
                 Console.WriteLine($"按鈕狀態更新: 選中設備={hasSelectedDevice}, 選中播放器={hasSelectedPlayer}, " +
                     $"有播放={hasAnyPlaying}, 有回放={hasAnyPlayback}, " +
@@ -652,6 +736,51 @@ namespace SentryX
             catch (Exception ex)
             {
                 ShowMessage($"更新按鈕狀態時發生錯誤：{ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 新增：更新 IVS 按鈕狀態
+        /// </summary>
+        private void UpdateIVSButtonState()
+        {
+            try
+            {
+                if (IVSToggleButton == null) return;
+
+                var selectedPlayer = _splitScreenManager?.SelectedPlayer;
+                bool hasPlayingVideo = selectedPlayer?.IsPlaying == true;
+
+                // IVS 按鈕只有在有播放視頻時才啟用
+                IVSToggleButton.IsEnabled = hasPlayingVideo;
+
+                if (hasPlayingVideo)
+                {
+                    // 取得當前 IVS 狀態並更新按鈕顯示
+                    var videoPlayer = selectedPlayer?.GetVideoPlayer();
+                    if (videoPlayer != null)
+                    {
+                        bool currentIVSState = videoPlayer.IsIVSRenderEnabled;
+                        UpdateIVSButtonDisplay(currentIVSState);
+                    }
+                    else
+                    {
+                        // 無法取得播放器實例，設為預設狀態
+                        UpdateIVSButtonDisplay(true); // 預設為啟用狀態
+                    }
+                }
+                else
+                {
+                    // 沒有播放時，顯示停用狀態
+                    IVSToggleButton.Content = "🎯 IVS關閉";
+                    IVSToggleButton.Background = new System.Windows.Media.SolidColorBrush(
+                        System.Windows.Media.Color.FromRgb(200, 200, 200)); // 淺灰色，表示不可用
+                    IVSToggleButton.ToolTip = "需要先播放視頻才能使用 IVS 功能";
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"更新 IVS 按鈕狀態時發生錯誤: {ex.Message}");
             }
         }
 
@@ -748,7 +877,7 @@ namespace SentryX
 
                 if (DeviceStatsTextBlock != null)
                 {
-                    DeviceStatsTextBlock.Text = $"總計: {totalDevices}, 在線: {onlineDevices}";
+                    DeviceStatsTextBlock.Text = $"總計: {totalDevices}, 在线: {onlineDevices}";
                 }
             }
             catch (Exception ex)

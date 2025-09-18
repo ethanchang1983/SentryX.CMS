@@ -13,17 +13,22 @@
             <RowDefinition Height="200" MinHeight="180"/>
         </Grid.RowDefinitions>
 
-        <!-- 工具列 - 添加PTZ控制按鈕 -->
+        <!-- 工具列 - 添加 IVS 控制按鈕 -->
         <StackPanel Grid.Row="0" Orientation="Horizontal" Background="LightGray" Margin="2">
             <Button Name="DeviceManagerButton" Content="🔧 設備管理" Click="DeviceManagerButton_Click" 
                     ToolTip="開啟設備管理視窗" Margin="2"/>
             <Button Name="RefreshButton" Content="🔄 刷新" Click="RefreshButton_Click" 
                     ToolTip="刷新設備列表" Margin="2"/>
             
-            <!-- 新增：PTZ控制按鈕 -->
+            <!-- PTZ 控制按鈕 -->
             <Button Name="PTZControlButton" Content="🎮 PTZ控制" Click="PTZControlButton_Click" 
                     ToolTip="開啟PTZ雲台控制視窗" Margin="2"
                     Background="#FF4CAF50" Foreground="White" FontWeight="Bold"/>
+
+            <!-- 新增：IVS 控制按鈕 -->
+            <Button Name="IVSToggleButton" Content="🎯 IVS開啟" Click="IVSToggleButton_Click" 
+                    ToolTip="切換 IVS 智能分析畫線規則顯示/隱藏" Margin="2"
+                    Background="#FF2196F3" Foreground="White" FontWeight="Bold"/>
 
             <!-- 多分割畫面選單 -->
             <Separator Width="10"/>

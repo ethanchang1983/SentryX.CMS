@@ -1,5 +1,5 @@
 ﻿// MultiViewPlayer.cs - 多視圖播放器 - 增強版本
-// 增加雙擊切換單/多分割畫面功能
+// 增加雙擊切換單/多分割畫面功能，並支援 IVS 控制
 
 using System;
 using System.Diagnostics;
@@ -203,7 +203,7 @@ namespace SentryX
                 Child = _containerPanel
             };
 
-            Debug.WriteLine($"MultiViewPlayer {index} 已建立（增強版本，支援雙擊切換）");
+            Debug.WriteLine($"MultiViewPlayer {index} 已建立（增強版本，支援雙擊切換和 IVS 控制）");
         }
 
         // === 公開方法 ===
@@ -248,8 +248,8 @@ namespace SentryX
                 // 確保顯示狀態正確
                 EnsureProperDisplayState();
 
-                // 建立新的播放器
-                _videoPlayer = new SimpleVideoPlayer(decodeMode, streamType);
+                // 建立新的播放器 - 預設啟用 IVS
+                _videoPlayer = new SimpleVideoPlayer(decodeMode, streamType, enableIVSByDefault: true);
 
                 // 取得視頻面板的句handles
                 IntPtr windowHandle = _videoPanel.Handle;
@@ -263,7 +263,7 @@ namespace SentryX
                 if (_videoPlayer.StartPlay(deviceHandle, channel, windowHandle, deviceName))
                 {
                     HasActiveContent = true; // 標記為有活躍內容
-                    Debug.WriteLine($"MultiViewPlayer {Index}: 開始播放成功 {deviceName} 通道 {channel} ({streamType})");
+                    Debug.WriteLine($"MultiViewPlayer {Index}: 開始播放成功 {deviceName} 通道 {channel} ({streamType}), IVS: {_videoPlayer.IsIVSRenderEnabled}");
                     return true;
                 }
                 else
@@ -283,6 +283,51 @@ namespace SentryX
                 HasActiveContent = false;
                 return false;
             }
+        }
+
+        /// <summary>
+        /// 新增：取得 SimpleVideoPlayer 實例 - 用於 IVS 控制
+        /// </summary>
+        /// <returns>SimpleVideoPlayer 實例，如果沒有播放則返回 null</returns>
+        public SimpleVideoPlayer? GetVideoPlayer()
+        {
+            return _videoPlayer;
+        }
+
+        /// <summary>
+        /// 新增：切換 IVS 顯示狀態
+        /// </summary>
+        /// <returns>切換後的狀態（true=啟用，false=停用），如果沒有播放器則返回 false</returns>
+        public bool ToggleIVSRender()
+        {
+            if (_videoPlayer != null)
+            {
+                return _videoPlayer.ToggleIVSRender();
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// 新增：設定 IVS 顯示狀態
+        /// </summary>
+        /// <param name="enable">是否啟用 IVS 顯示</param>
+        /// <returns>是否成功設定</returns>
+        public bool SetIVSRender(bool enable)
+        {
+            if (_videoPlayer != null)
+            {
+                return _videoPlayer.SetIVSRender(enable);
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// 新增：取得當前 IVS 顯示狀態
+        /// </summary>
+        /// <returns>true=啟用，false=停用或沒有播放器</returns>
+        public bool IsIVSRenderEnabled()
+        {
+            return _videoPlayer?.IsIVSRenderEnabled ?? false;
         }
 
         /// <summary>
@@ -351,7 +396,8 @@ namespace SentryX
                 CurrentPlaybackState.Channel,
                 CurrentPlaybackState.DecodeMode,
                 CurrentPlaybackState.StreamType,
-                CurrentPlaybackState.DeviceName
+                CurrentPlaybackState.DeviceName,
+                CurrentPlaybackState.DeviceId
             );
         }
 

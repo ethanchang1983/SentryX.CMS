@@ -1,5 +1,5 @@
-﻿// SimpleVideoPlayer.cs - 極簡視頻播放器 - 完整修正版本
-// 修正停止播放後無法重新播放的問題
+﻿// SimpleVideoPlayer.cs - 極簡視頻播放器 - 混合模式版本
+// 同時支援 IVS 顯示和硬體/軟體解碼選擇
 
 using System;
 using System.Diagnostics;
@@ -12,7 +12,7 @@ using System.Windows.Forms; // Windows Forms 控件支援
 namespace SentryX
 {
     /// <summary>
-    /// 極簡視頻播放器 - 專門播放大華攝影機的視頻
+    /// 極簡視頻播放器 - 支援 IVS 畫線規則顯示和硬體/軟體解碼選擇
     /// </summary>
     public class SimpleVideoPlayer : IDisposable
     {
@@ -24,7 +24,7 @@ namespace SentryX
         private int _playPort = -1;
 
         /// <summary>
-        /// 大華 SDK 的實時播放句 handle - 用來控制從攝影機接收數據
+        /// 大華 SDK 的實時播放句 handle - 用來控制從攝影機接收數據和 IVS 顯示
         /// </summary>
         private IntPtr _realPlayHandle = IntPtr.Zero;
 
@@ -57,6 +57,11 @@ namespace SentryX
         /// 當前使用的碼流類型
         /// </summary>
         private VideoStreamType _streamType = VideoStreamType.Main;
+
+        /// <summary>
+        /// IVS 畫線規則是否啟用 - 預設為啟用
+        /// </summary>
+        private bool _ivsRenderEnabled = true;
 
         /// <summary>
         /// 視頻資訊 - 用於監控性能
@@ -117,11 +122,13 @@ namespace SentryX
         /// </summary>
         /// <param name="decodeMode">指定要使用的解碼模式（預設為軟體解碼）</param>
         /// <param name="streamType">指定要使用的碼流類型（預設為主碼流）</param>
-        public SimpleVideoPlayer(DecodeMode decodeMode = DecodeMode.Software, VideoStreamType streamType = VideoStreamType.Main)
+        /// <param name="enableIVSByDefault">是否預設啟用 IVS 畫線規則顯示（預設為 true）</param>
+        public SimpleVideoPlayer(DecodeMode decodeMode = DecodeMode.Software, VideoStreamType streamType = VideoStreamType.Main, bool enableIVSByDefault = true)
         {
             // 記住用戶選擇的解碼模式和碼流類型
             _decodeMode = decodeMode;
             _streamType = streamType;
+            _ivsRenderEnabled = enableIVSByDefault;
 
             // 確保 Play SDK 已經初始化（全域只做一次）
             EnsureSDKInitialized();
@@ -132,13 +139,13 @@ namespace SentryX
             // 增加全域播放器計數
             Interlocked.Increment(ref _globalPlayerCount);
 
-            Debug.WriteLine($"SimpleVideoPlayer 已建立，解碼模式: {decodeMode}, 碃流: {streamType}, 全域播放器數量: {_globalPlayerCount}");
+            Debug.WriteLine($"SimpleVideoPlayer 已建立，解碼模式: {decodeMode}, 碼流: {streamType}, IVS預設: {enableIVSByDefault}, 全域播放器數量: {_globalPlayerCount}");
         }
 
         // === 公開方法：使用者會呼叫的方法 ===
 
         /// <summary>
-        /// 開始播放指定攝影機的視頻 - 修正版本，添加重新播放支援
+        /// 開始播放指定攝影機的視頻 - 混合模式版本，同時支援 IVS 和硬體解碼
         /// </summary>
         /// <param name="deviceHandle">攝影機設備的登入句柄</param>
         /// <param name="channel">要播放的通道號（0=第1個通道）</param>
@@ -167,8 +174,6 @@ namespace SentryX
                 {
                     Debug.WriteLine("檢測到正在播放，先完全停止");
                     StopPlay();
-
-                    // 等待清理完成
                     System.Threading.Thread.Sleep(100);
                 }
 
@@ -185,25 +190,31 @@ namespace SentryX
                 // 第6步：初始化視頻資訊
                 InitializeVideoInfo(deviceName, channel);
 
-                // 第7步：初始化 Play SDK 播放器（準備解碼環境）
+                // 第7步：開始從大華攝影機接收數據（用於 IVS 顯示）
+                if (!StartReceiveDataForIVS(deviceHandle, channel))
+                {
+                    Debug.WriteLine("開始接收視頻數據失敗");
+                    return false;
+                }
+
+                // 第8步：關鍵 - 在取得 _realPlayHandle 後立即設定 IVS
+                if (_ivsRenderEnabled && _realPlayHandle != IntPtr.Zero)
+                {
+                    EnableIVSRenderImmediate();
+                }
+
+                // 第9步：初始化 Play SDK 播放器（準備解碼環境，支援硬體/軟體解碼選擇）
                 if (!InitializePlaySDK())
                 {
                     Debug.WriteLine("Play SDK 初始化失敗");
+                    CleanupReceiveData(); // 失敗了就清理接收資源
                     return false;
                 }
 
-                // 第8步：開始從大華攝影機接收數據
-                if (!StartReceiveData(deviceHandle, channel))
-                {
-                    Debug.WriteLine("開始接收視頻數據失敗");
-                    CleanupPlaySDK(); // 失敗了就清理資源
-                    return false;
-                }
-
-                // 第9步：標記為正在播放
+                // 第10步：標記為正在播放
                 _isPlaying = true;
                 _consecutiveErrorCount = 0; // 重置錯誤計數器
-                Debug.WriteLine($"視頻播放開始成功，設備: {deviceName}, 通道: {channel}, 碼流: {_streamType}");
+                Debug.WriteLine($"視頻播放開始成功，設備: {deviceName}, 通道: {channel}, 碼流: {_streamType}, 解碼: {_decodeMode}, IVS: {_ivsRenderEnabled}");
                 return true;
             }
             catch (Exception ex)
@@ -212,6 +223,160 @@ namespace SentryX
                 return false;
             }
         }
+
+        /// <summary>
+        /// 開始從大華攝影機接收視頻數據（專門用於 IVS 顯示）
+        /// </summary>
+        /// <param name="deviceHandle">攝影機設備句柄</param>
+        /// <param name="channel">通道號</param>
+        /// <returns>是否成功</returns>
+        private bool StartReceiveDataForIVS(IntPtr deviceHandle, int channel)
+        {
+            try
+            {
+                // 根據碼流類型選擇相應的播放類型
+                EM_RealPlayType playType = _streamType == VideoStreamType.Main
+                    ? EM_RealPlayType.EM_A_RType_Realplay_0      // 主碼流
+                    : EM_RealPlayType.EM_A_RType_Realplay_1;     // 輔碼流
+
+                // 開始即時播放（從大華攝影機取得數據）
+                // 注意：這裡的 hWnd 設為 IntPtr.Zero，因為我們用 Play SDK 來顯示
+                _realPlayHandle = NETClient.RealPlay(
+                    deviceHandle,                                 // 攝影機設備的登入句 handle
+                    channel,                                      // 要播放的通道號
+                    IntPtr.Zero,                                  // 不直接顯示到窗口（重要：保持與原本邏輯一致）
+                    playType                                      // 播放類型（主碼流或輔碼流）
+                );
+
+                // 檢查是否成功開始接收數據
+                if (_realPlayHandle == IntPtr.Zero)
+                {
+                    string error = NETClient.GetLastError();
+                    Debug.WriteLine($"開始即時播放失敗：{error}");
+
+                    // 如果是連線失敗，可能是設備負載過重
+                    if (error.Contains("Failed to get connect session information"))
+                    {
+                        Debug.WriteLine($"設備連線會話信息獲取失敗，可能原因：設備負載過重或網路問題，當前全域播放器數量: {_globalPlayerCount}");
+                    }
+
+                    return false;
+                }
+
+                // 設定數據回調 - 當有視頻數據時會呼叫我們的 OnVideoDataReceived 方法
+                if (!NETClient.SetRealDataCallBack(
+                    _realPlayHandle,                 // 播放句柄
+                    _dataCallback,                   // 回調函數
+                    IntPtr.Zero,                     // 用戶數據（我們不需要）
+                    EM_REALDATA_FLAG.RAW_DATA        // 接收原始數據
+                ))
+                {
+                    string error = NETClient.GetLastError();
+                    Debug.WriteLine($"設定數據回調失敗：{error}");
+                    return false;
+                }
+
+                Debug.WriteLine($"開始接收通道 {channel} 的視頻數據成功（{_streamType}）");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"開始接收數據時異常：{ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 啟用 IVS 畫線規則顯示（立即執行版本 - 參考DEMO）
+        /// </summary>
+        private void EnableIVSRenderImmediate()
+        {
+            try
+            {
+                if (_realPlayHandle != IntPtr.Zero)
+                {
+                    // 參考DEMO：在RealPlay之後立即呼叫RenderPrivateData
+                    bool result = NETClient.RenderPrivateData(_realPlayHandle, true);
+                    
+                    if (result)
+                    {
+                        Debug.WriteLine("IVS 畫線規則顯示已立即啟用（參考DEMO方式）");
+                    }
+                    else
+                    {
+                        string error = NETClient.GetLastError();
+                        Debug.WriteLine($"立即啟用 IVS 畫線規則失敗：{error}");
+                    }
+                }
+                else
+                {
+                    Debug.WriteLine("無法立即啟用 IVS：_realPlayHandle 為空");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"立即啟用 IVS 畫線規則時發生異常：{ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 啟用或停用 IVS 畫線規則顯示
+        /// </summary>
+        /// <param name="enable">true=啟用，false=停用</param>
+        /// <returns>是否成功設定</returns>
+        public bool SetIVSRender(bool enable)
+        {
+            try
+            {
+                // 更新內部狀態
+                _ivsRenderEnabled = enable;
+
+                // 如果正在播放，立即應用設定
+                if (_isPlaying && _realPlayHandle != IntPtr.Zero)
+                {
+                    bool result = NETClient.RenderPrivateData(_realPlayHandle, enable);
+                    
+                    if (result)
+                    {
+                        Debug.WriteLine($"IVS 畫線規則顯示已{(enable ? "啟用" : "停用")}");
+                    }
+                    else
+                    {
+                        string error = NETClient.GetLastError();
+                        Debug.WriteLine($"設定 IVS 畫線規則失敗：{error}");
+                    }
+                    
+                    return result;
+                }
+                else
+                {
+                    Debug.WriteLine($"IVS 狀態已更新為 {(enable ? "啟用" : "停用")}，將在下次播放時生效");
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"設定 IVS 畫線規則時發生異常：{ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 切換 IVS 畫線規則顯示狀態
+        /// </summary>
+        /// <returns>切換後的狀態（true=啟用，false=停用）</returns>
+        public bool ToggleIVSRender()
+        {
+            bool newState = !_ivsRenderEnabled;
+            SetIVSRender(newState);
+            return newState;
+        }
+
+        /// <summary>
+        /// 取得當前 IVS 畫線規則顯示狀態
+        /// </summary>
+        /// <returns>true=啟用，false=停用</returns>
+        public bool IsIVSRenderEnabled => _ivsRenderEnabled;
 
         /// <summary>
         /// 停止視頻播放 - 完全修正版本，確保可以重新播放
@@ -229,7 +394,7 @@ namespace SentryX
                 _isPlaying = false;
 
                 // 第1步：停止從攝影機接收數據
-                StopReceiveData();
+                CleanupReceiveData();
 
                 // 第2步：等待一下讓數據回調完全停止
                 System.Threading.Thread.Sleep(50);
@@ -271,10 +436,11 @@ namespace SentryX
                 // 清理視頻資訊
                 CurrentVideoInfo = null;
 
-                // 重要：保留 _displayHandle，因為下次播放還需要用到
+                // 重要：保留 _displayHandle 和 _ivsRenderEnabled，因為下次播放還需要用到
                 // _displayHandle = IntPtr.Zero; // <-- 不要重置這個
+                // _ivsRenderEnabled = true; // <-- 保留 IVS 設定狀態
 
-                Debug.WriteLine("播放器狀態已重置（保留 displayHandle）");
+                Debug.WriteLine("播放器狀態已重置（保留 displayHandle 和 IVS 設定）");
             }
             catch (Exception ex)
             {
@@ -551,7 +717,7 @@ namespace SentryX
                     return false;
                 }
 
-                // 第3步：根據用戶選擇設定解碼引擎
+                // 第3步：根據用戶選擇設定解碼引擎（重要：這裡恢復硬體/軟體解碼選擇功能）
                 SetupDecodeEngine();
 
                 // 第4步：根據播放器數量動態調整緩衝區大小
@@ -614,7 +780,7 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 根據用戶選擇設定解碼引擎 - 修改為優先軟體解碼
+        /// 根據用戶選擇設定解碼引擎 - 恢復完整功能
         /// </summary>
         private void SetupDecodeEngine()
         {
@@ -695,71 +861,9 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 開始從大華攝影機接收視頻數據 - 支援碼流選擇
+        /// 清理接收數據資源
         /// </summary>
-        /// <param name="deviceHandle">攝影機設備句柄</param>
-        /// <param name="channel">通道號</param>
-        /// <returns>是否成功</returns>
-        private bool StartReceiveData(IntPtr deviceHandle, int channel)
-        {
-            try
-            {
-                // 根據碼流類型選擇相應的播放類型
-                EM_RealPlayType playType = _streamType == VideoStreamType.Main
-                    ? EM_RealPlayType.EM_A_RType_Realplay_0      // 主碼流
-                    : EM_RealPlayType.EM_A_RType_Realplay_1;     // 輔碼流
-
-                // 開始即時播放（從大華攝影機取得數據）
-                // 注意：這裡的 hWnd 設為 IntPtr.Zero，因為我們用 Play SDK 來顯示
-                _realPlayHandle = NETClient.RealPlay(
-                    deviceHandle,                                 // 攝影機設備的登入句 handle
-                    channel,                                      // 要播放的通道號
-                    IntPtr.Zero,                                  // 不直接顯示到窗口
-                    playType                                      // 播放類型（主碼流或輔碼流）
-                );
-
-                // 檢查是否成功開始接收數據
-                if (_realPlayHandle == IntPtr.Zero)
-                {
-                    string error = NETClient.GetLastError();
-                    Debug.WriteLine($"開始即時播放失敗：{error}");
-
-                    // 如果是連線失敗，可能是設備負載過重
-                    if (error.Contains("Failed to get connect session information"))
-                    {
-                        Debug.WriteLine($"設備連線會話信息獲取失敗，可能原因：設備負載過重或網路問題，當前全域播放器數量: {_globalPlayerCount}");
-                    }
-
-                    return false;
-                }
-
-                // 設定數據回調 - 當有視頻數據時會呼叫我們的 OnVideoDataReceived 方法
-                if (!NETClient.SetRealDataCallBack(
-                    _realPlayHandle,                 // 播放句柄
-                    _dataCallback,                   // 回調函數
-                    IntPtr.Zero,                     // 用戶數據（我們不需要）
-                    EM_REALDATA_FLAG.RAW_DATA        // 接收原始數據
-                ))
-                {
-                    string error = NETClient.GetLastError();
-                    Debug.WriteLine($"設定數據回調失敗：{error}");
-                    return false;
-                }
-
-                Debug.WriteLine($"開始接收通道 {channel} 的視頻數據成功（{_streamType}）");
-                return true;
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"開始接收數據時異常：{ex.Message}");
-                return false;
-            }
-        }
-
-        /// <summary>
-        /// 停止從攝影機接收數據
-        /// </summary>
-        private void StopReceiveData()
+        private void CleanupReceiveData()
         {
             if (_realPlayHandle != IntPtr.Zero)
             {
@@ -901,7 +1005,7 @@ namespace SentryX
                 var avgFps = elapsed > 0 ? CurrentVideoInfo.TotalFrames / elapsed : 0;
                 var avgBitrate = elapsed > 0 ? (CurrentVideoInfo.TotalBytes * 8) / (elapsed * 1000) : 0;
 
-                Debug.WriteLine($"性能報告 - 端口{_playPort}: FPS={avgFps:F1}, 碼率={avgBitrate:F1}kbps, 重置={_bufferResetCount}, 丟包={_droppedFrameCount}");
+                Debug.WriteLine($"性能報告 - 端口{_playPort}: FPS={avgFps:F1}, 碼率={avgBitrate:F1}kbps, 重置={_bufferResetCount}, 丟包={_droppedFrameCount}, 解碼={_decodeMode}, IVS={_ivsRenderEnabled}");
             }
         }
 

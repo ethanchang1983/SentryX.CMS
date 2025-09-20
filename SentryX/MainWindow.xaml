@@ -13,7 +13,7 @@
             <RowDefinition Height="200" MinHeight="180"/>
         </Grid.RowDefinitions>
 
-        <!-- 工具列 - 添加PTZ控制按鈕 -->
+        <!-- 工具列 - 添加語音接收按鈕 -->
         <StackPanel Grid.Row="0" Orientation="Horizontal" Background="LightGray" Margin="2">
             <Button Name="DeviceManagerButton" Content="🔧 設備管理" Click="DeviceManagerButton_Click" 
                     ToolTip="開啟設備管理視窗" Margin="2"/>
@@ -25,12 +25,40 @@
                     ToolTip="開啟PTZ雲台控制視窗" Margin="2"
                     Background="#FF4CAF50" Foreground="White" FontWeight="Bold"/>
 
+            <!-- 🔥 新增：語音接收按鈕 -->
+            <Button Name="VoiceReceiveButton" 
+                    Content="🔇 音訊關閉" 
+                    Width="100" 
+                    Height="35" 
+                    Margin="5,2"
+                    Background="#FF9E9E9E"
+                    Foreground="White"
+                    FontWeight="Bold"
+                    BorderThickness="0"
+                    Click="VoiceReceiveButton_Click"
+                    ToolTip="點擊開始接收選中分割區域的設備音訊"
+                    IsEnabled="False"/>
+
+            <!-- 🔥 新增：語音對講按鈕 -->
+            <Button Name="VoiceTalkButton" 
+                    Content="🎤 對講關閉" 
+                    Width="100" 
+                    Height="35" 
+                    Margin="5,2"
+                    Background="#FFFF5722"
+                    Foreground="White"
+                    FontWeight="Bold"
+                    BorderThickness="0"
+                    Click="VoiceTalkButton_Click"
+                    ToolTip="點擊開始與選中分割區域的設備進行語音對講"
+                    IsEnabled="False"/>
+
             <!-- 在適當的位置（比如其他控制按鈕旁邊）添加 IVS 按鈕 -->
             <Button Name="IVSToggleButton" 
                     Content="🎯 IVS關閉" 
                     Width="100" 
                     Height="35" 
-                    Margin="5"
+                    Margin="5,2"
                     Background="#9E9E9E"
                     Foreground="White"
                     FontWeight="Bold"

@@ -622,7 +622,7 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 🔥 IVS 畫線規則顯示切換按鈕點擊事件
+        /// 🔥 IVS 畫線規則顯示切換按鈕點擊事件 - 修正版本
         /// </summary>
         private void IVSToggleButton_Click(object sender, RoutedEventArgs e)
         {
@@ -656,17 +656,46 @@ namespace SentryX
                     return;
                 }
 
-                // 切換 IVS 狀態
-                bool newState = videoPlayer.ToggleIVSRender();
+                // 記錄當前狀態
+                bool currentState = videoPlayer.IsIVSRenderEnabled;
                 
-                // 更新按鈕顯示
-                UpdateIVSButtonDisplay(newState);
+                // 切換 IVS 狀態
+                bool newState = selectedPlayer.ToggleIVSRender();
+                
+                // 🔥 修正：如果關閉 IVS，立即更新按鈕顯示並清除選中狀態
+                if (!newState)
+                {
+                    UpdateIVSButtonDisplay(newState);
+                    
+                    // 延遲清除選中狀態，確保 IVS 完全關閉
+                    Task.Run(async () =>
+                    {
+                        await Task.Delay(500); // 等待 IVS 完全關閉
+                        
+                        Dispatcher.Invoke(() =>
+                        {
+                            // 強制清除選中狀態
+                            selectedPlayer.ForceClearSelectedState();
+                            
+                            // 重新選擇播放器以確保狀態正確
+                            _splitScreenManager?.SelectPlayer(selectedPlayer);
+                            
+                            ShowMessage($"🧹 已清除分割區域 {selectedPlayer.Index + 1} 的 IVS 相關選中狀態");
+                        });
+                    });
+                }
+                else
+                {
+                    // 如果啟用 IVS，正常更新按鈕顯示
+                    UpdateIVSButtonDisplay(newState);
+                }
 
                 // 顯示狀態變更訊息
                 string statusMessage = newState ? "已啟用" : "已停用";
-                ShowMessage($"🎯 分割區域 {selectedPlayer.Index + 1} 的 IVS 畫線規則顯示{statusMessage}");
+                string decodeMode = videoPlayer.DecodeMode.ToString();
+                ShowMessage($"🎯 分割區域 {selectedPlayer.Index + 1} 的 IVS 畫線規則顯示{statusMessage}（{decodeMode} 解碼）");
 
-                Console.WriteLine($"IVS 切換: 播放器 {selectedPlayer.Index + 1}, 新狀態: {newState}");
+                Console.WriteLine($"IVS 切換: 播放器 {selectedPlayer.Index + 1}, {currentState} -> {newState}");
             }
             catch (Exception ex)
             {

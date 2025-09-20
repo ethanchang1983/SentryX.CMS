@@ -786,7 +786,7 @@ namespace SentryX
         private void UpdateLastIVSUpdateTime() => _lastIVSUpdateTime = DateTime.Now;
 
         /// <summary>
-        /// 🔥 修正：設定 IVS 顯示狀態 - 加入時間記錄
+        /// 🔥 修正：設定 IVS 顯示狀態 - 解決紅框問題
         /// </summary>
         public bool SetIVSRender(bool enable)
         {
@@ -798,6 +798,30 @@ namespace SentryX
                 
                 Debug.WriteLine($"MultiViewPlayer {Index}: IVS 設定為 {enable}, 結果: {result}");
                 
+                // 🔥 關鍵修正：如果關閉 IVS，立即清除選中狀態
+                if (!enable && result)
+                {
+                    // 延遲清除選中狀態，避免 IVS 渲染過程的干擾
+                    Task.Run(async () =>
+                    {
+                        await Task.Delay(300); // 等待 IVS 完全關閉
+                        
+                        if (_containerPanel?.InvokeRequired == true)
+                        {
+                            _containerPanel.BeginInvoke(new Action(() =>
+                            {
+                                Debug.WriteLine($"MultiViewPlayer {Index}: IVS 關閉後清除選中狀態");
+                                ForceClearSelectedState();
+                            }));
+                        }
+                        else
+                        {
+                            Debug.WriteLine($"MultiViewPlayer {Index}: IVS 關閉後清除選中狀態");
+                            ForceClearSelectedState();
+                        }
+                    });
+                }
+                
                 return result;
             }
             catch (Exception ex)
@@ -808,7 +832,7 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 🔥 修正：切換 IVS 顯示狀態 - 加入時間記錄
+        /// 🔥 修正：切換 IVS 顯示狀態 - 解決紅框問題
         /// </summary>
         public bool ToggleIVSRender()
         {
@@ -816,11 +840,38 @@ namespace SentryX
             {
                 UpdateLastIVSUpdateTime(); // 記錄 IVS 更新時間
                 
-                bool result = _videoPlayer?.ToggleIVSRender() ?? false;
+                bool currentState = _videoPlayer?.IsIVSRenderEnabled ?? false;
+                bool newState = !currentState;
                 
-                Debug.WriteLine($"MultiViewPlayer {Index}: IVS 切換結果: {result}");
+                bool result = _videoPlayer?.SetIVSRender(newState) ?? false;
                 
-                return result;
+                Debug.WriteLine($"MultiViewPlayer {Index}: IVS 切換 {currentState} -> {newState}, 結果: {result}");
+                
+                // 🔥 關鍵修正：如果關閉 IVS，立即清除選中狀態
+                if (!newState && result)
+                {
+                    // 延遲清除選中狀態，避免 IVS 渲染過程的干擾
+                    Task.Run(async () =>
+                    {
+                        await Task.Delay(300); // 等待 IVS 完全關閉
+                        
+                        if (_containerPanel?.InvokeRequired == true)
+                        {
+                            _containerPanel.BeginInvoke(new Action(() =>
+                            {
+                                Debug.WriteLine($"MultiViewPlayer {Index}: IVS 切換關閉後清除選中狀態");
+                                ForceClearSelectedState();
+                            }));
+                        }
+                        else
+                        {
+                            Debug.WriteLine($"MultiViewPlayer {Index}: IVS 切換關閉後清除選中狀態");
+                            ForceClearSelectedState();
+                        }
+                    });
+                }
+                
+                return newState;
             }
             catch (Exception ex)
             {

@@ -98,6 +98,18 @@ namespace SentryX
         [DllImport(DLL_NAME)]
         public static extern bool PLAY_ResetSourceBuffer(int port);
 
+        // 🔥 新增：IVS 私有數據渲染支援
+        /// <summary>
+        /// 顯示私有數據，如規則框、規則框報警、移動檢測等
+        /// Display private data such as rule box, rule box alarm, mobile detection, etc.
+        /// </summary>
+        /// <param name="nPort">端口號</param>
+        /// <param name="bEnable">TRUE：開啟 FALSE：關閉</param>
+        /// <param name="nReserve">保留參數</param>
+        /// <returns>TRUE--成功，FALSE--失敗</returns>
+        [DllImport(DLL_NAME)]
+        public static extern bool PLAY_RenderPrivateData(int nPort, bool bEnable, int nReserve = 0);
+
         // === 常數定義 ===
 
         /// <summary>

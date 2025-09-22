@@ -3,6 +3,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Threading.Tasks;
 
 namespace SentryX
 {
@@ -18,7 +19,9 @@ namespace SentryX
         private DeviceListManager? _deviceListManager;
         private PerformanceMonitorManager? _performanceManager;
         private PlaybackControlDialog? _playbackControlDialog;
-        
+        // 🔥 新增：警報訂閱管理器
+        private AlarmSubscriptionManager? _alarmSubscriptionManager;
+
         // 🔥 新增：語音對講管理器
         private VoiceIntercomManager? _voiceIntercomManager;
 
@@ -51,6 +54,7 @@ namespace SentryX
                 }
 
                 SetupVideoArea();
+                SetupAlarmArea(); // 🔥 新增：初始化警報區域
                 _uiManager.SubscribeEvents();
                 _performanceManager?.StartMonitoring();
 
@@ -76,6 +80,8 @@ namespace SentryX
             
             // 🔥 新增：初始化語音對講管理器
             _voiceIntercomManager = new VoiceIntercomManager(this);
+            // 🔥 新增：初始化警報訂閱管理器
+            _alarmSubscriptionManager = new AlarmSubscriptionManager(this);
         }
 
         private void SetupVideoArea()
@@ -107,6 +113,45 @@ namespace SentryX
             }
         }
 
+        /// <summary>
+        /// 🔥 新增：初始化警報區域
+        /// </summary>
+        private void SetupAlarmArea()
+        {
+            try
+            {
+                if (AlarmListBox == null || _alarmSubscriptionManager == null)
+                {
+                    Console.WriteLine("警告：警報相關控制項或管理器未初始化");
+                    return;
+                }
+
+                // 將警報事件集合綁定到列表控制項
+                AlarmListBox.ItemsSource = _alarmSubscriptionManager.AlarmEvents;
+
+                // 訂閱警報相關事件
+                _alarmSubscriptionManager.SubscriptionStatusChanged += OnAlarmSubscriptionStatusChanged;
+                _alarmSubscriptionManager.AlarmReceived += OnAlarmReceived;
+
+                // 初始化警報類型篩選器
+                if (AlarmTypeFilterComboBox != null)
+                {
+                    AlarmTypeFilterComboBox.SelectedIndex = 0; // 預設選擇"全部"
+                }
+
+                // 初始化警報按鈕狀態
+                UpdateAlarmSubscribeButtonDisplay(false);
+                UpdateAlarmCountDisplay();
+
+                ShowMessage("🔔 警報事件區域初始化完成");
+            }
+            catch (Exception ex)
+            {
+                ShowMessage($"❌ 警報區域初始化失敗: {ex.Message}");
+                Console.WriteLine($"SetupAlarmArea 異常：{ex}");
+            }
+        }
+
         #region Event Handlers
 
         private void SplitScreenComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -127,6 +172,110 @@ namespace SentryX
             catch (Exception ex)
             {
                 ShowMessage($"❌ 切換分割畫面時發生錯誤: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 🔥 新增：警報訂閱按鈕點擊事件
+        /// </summary>
+        private void AlarmSubscribeButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (_alarmSubscriptionManager == null)
+                {
+                    ShowMessage("❌ 警報訂閱管理器尚未初始化");
+                    return;
+                }
+
+                bool currentStatus = _alarmSubscriptionManager.IsSubscribed;
+
+                if (currentStatus)
+                {
+                    // 目前正在訂閱，執行取消訂閱
+                    ShowMessage("🔔 正在停止警報訂閱...");
+                    _alarmSubscriptionManager.StopSubscription();
+                }
+                else
+                {
+                    // 目前沒有訂閱，開始訂閱
+                    ShowMessage("🔔 正在啟動警報訂閱...");
+
+                    // 檢查是否有在線設備
+                    var onlineDevices = DahuaSDK.GetOnlineDevices();
+                    if (onlineDevices.Count == 0)
+                    {
+                        ShowMessage("❌ 沒有在線設備，無法啟動警報訂閱");
+                        ShowMessage("💡 請先在設備管理中添加並連接設備");
+                        return;
+                    }
+
+                    _alarmSubscriptionManager.StartSubscription();
+                }
+            }
+            catch (Exception ex)
+            {
+                ShowMessage($"❌ 警報訂閱操作失敗: {ex.Message}");
+                Console.WriteLine($"AlarmSubscribeButton_Click 異常: {ex}");
+            }
+        }
+
+        /// <summary>
+        /// 🔥 新增：警報類型篩選器選擇變更事件
+        /// </summary>
+        private void AlarmTypeFilterComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            try
+            {
+                if (AlarmTypeFilterComboBox?.SelectedItem is ComboBoxItem selectedItem &&
+                    _alarmSubscriptionManager != null)
+                {
+                    string tag = selectedItem.Tag?.ToString() ?? "All";
+
+                    if (tag == "All")
+                    {
+                        _alarmSubscriptionManager.FilterAlarmsByType(null);
+                        ShowMessage("🔍 顯示所有類型的警報事件");
+                    }
+                    else if (Enum.TryParse<AlarmType>(tag, out var alarmType))
+                    {
+                        _alarmSubscriptionManager.FilterAlarmsByType(alarmType);
+                        ShowMessage($"🔍 僅顯示 {GetAlarmTypeDisplayName(alarmType)} 類型的警報事件");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"AlarmTypeFilterComboBox_SelectionChanged 發生錯誤: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 🔥 新增：清除警報按鈕點擊事件
+        /// </summary>
+        private void ClearAlarmsButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (_alarmSubscriptionManager == null) return;
+
+                var result = System.Windows.MessageBox.Show(
+                    "確定要清除所有警報記錄嗎？\n此操作無法復原。",
+                    "確認清除",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Question);
+
+                if (result == MessageBoxResult.Yes)
+                {
+                    _alarmSubscriptionManager.ClearAllAlarms();
+                    UpdateAlarmCountDisplay();
+                    ShowMessage("🗑️ 已清除所有警報記錄");
+                }
+            }
+            catch (Exception ex)
+            {
+                ShowMessage($"❌ 清除警報記錄失敗: {ex.Message}");
+                Console.WriteLine($"ClearAlarmsButton_Click 異常: {ex}");
             }
         }
 
@@ -1004,6 +1153,186 @@ namespace SentryX
 
         #endregion
 
+        #region Alarm Event Handlers
+
+        /// <summary>
+        /// 🔥 新增：警報訂閱狀態改變事件處理
+        /// </summary>
+        private void OnAlarmSubscriptionStatusChanged(bool isSubscribed)
+        {
+            try
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    UpdateAlarmSubscribeButtonDisplay(isSubscribed);
+                    UpdateAlarmCountDisplay();
+
+                    if (isSubscribed)
+                    {
+                        ShowMessage("✅ 警報訂閱已啟動");
+                    }
+                    else
+                    {
+                        ShowMessage("🔔 警報訂閱已停止");
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"OnAlarmSubscriptionStatusChanged 發生錯誤: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 🔥 新增：收到警報事件處理
+        /// </summary>
+        private void OnAlarmReceived(AlarmEvent alarmEvent)
+        {
+            try
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    // 更新警報計數顯示
+                    UpdateAlarmCountDisplay();
+
+                    // 根據警報優先級顯示不同的訊息
+                    string priorityIcon = alarmEvent.Priority switch
+                    {
+                        AlarmPriority.High => "🚨",
+                        AlarmPriority.Normal => "⚠️",
+                        AlarmPriority.Low => "ℹ️",
+                        _ => "🔔"
+                    };
+
+                    ShowMessage($"{priorityIcon} 新警報：{alarmEvent.DeviceName} - {alarmEvent.TypeName}");
+
+                    // 如果是高優先級警報，可以考慮額外的提醒方式
+                    if (alarmEvent.Priority == AlarmPriority.High)
+                    {
+                        // 可以在這裡添加聲音提醒、彈窗等
+                        Console.WriteLine($"🚨 高優先級警報：{alarmEvent.DeviceName} - {alarmEvent.Description}");
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"OnAlarmReceived 發生錯誤: {ex.Message}");
+            }
+        }
+
+        #endregion
+
+        #region Alarm Display Methods
+
+        /// <summary>
+        /// 🔥 新增：更新警報訂閱按鈕顯示狀態
+        /// </summary>
+        private void UpdateAlarmSubscribeButtonDisplay(bool isSubscribed)
+        {
+            try
+            {
+                if (AlarmSubscribeButton != null)
+                {
+                    if (isSubscribed)
+                    {
+                        AlarmSubscribeButton.Content = "🔕 停止訂閱";
+                        AlarmSubscribeButton.Background = new System.Windows.Media.SolidColorBrush(
+                            System.Windows.Media.Color.FromRgb(255, 87, 34)); // 橘紅色
+                        AlarmSubscribeButton.ToolTip = "點擊停止訂閱設備警報事件";
+                    }
+                    else
+                    {
+                        AlarmSubscribeButton.Content = "🔔 訂閱警報";
+                        AlarmSubscribeButton.Background = new System.Windows.Media.SolidColorBrush(
+                            System.Windows.Media.Color.FromRgb(33, 150, 243)); // 藍色
+                        AlarmSubscribeButton.ToolTip = "點擊開始訂閱設備警報事件";
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"更新警報訂閱按鈕顯示時發生錯誤: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 🔥 新增：更新警報計數顯示
+        /// </summary>
+        private void UpdateAlarmCountDisplay()
+        {
+            try
+            {
+                if (AlarmCountTextBlock != null && _alarmSubscriptionManager != null)
+                {
+                    if (!_alarmSubscriptionManager.IsSubscribed)
+                    {
+                        AlarmCountTextBlock.Text = "未訂閱";
+                        AlarmCountTextBlock.Foreground = System.Windows.Media.Brushes.Gray;
+                    }
+                    else
+                    {
+                        var totalCount = _alarmSubscriptionManager.AlarmEvents.Count;
+                        var unreadCount = _alarmSubscriptionManager.UnreadCount;
+
+                        if (totalCount == 0)
+                        {
+                            AlarmCountTextBlock.Text = "無警報";
+                            AlarmCountTextBlock.Foreground = System.Windows.Media.Brushes.Green;
+                        }
+                        else
+                        {
+                            AlarmCountTextBlock.Text = unreadCount > 0 ?
+                                $"共 {totalCount} 筆 (未讀 {unreadCount})" :
+                                $"共 {totalCount} 筆";
+                            AlarmCountTextBlock.Foreground = unreadCount > 0 ?
+                                System.Windows.Media.Brushes.Red :
+                                System.Windows.Media.Brushes.Blue;
+                        }
+                    }
+
+                    // 更新無警報提示的顯示狀態
+                    if (NoAlarmsTextBlock != null)
+                    {
+                        bool hasAlarms = _alarmSubscriptionManager.AlarmEvents.Count > 0;
+                        NoAlarmsTextBlock.Visibility = hasAlarms ? Visibility.Collapsed : Visibility.Visible;
+
+                        if (!hasAlarms)
+                        {
+                            NoAlarmsTextBlock.Text = _alarmSubscriptionManager.IsSubscribed ?
+                                "暫無警報事件" : "請先啟動警報訂閱";
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"更新警報計數顯示時發生錯誤: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 🔥 新增：取得警報類型的顯示名稱
+        /// </summary>
+        private static string GetAlarmTypeDisplayName(AlarmType alarmType)
+        {
+            return alarmType switch
+            {
+                AlarmType.MotionDetect => "移動偵測",
+                AlarmType.VideoLoss => "視頻丟失",
+                AlarmType.VideoBlind => "視頻遮蔽",
+                AlarmType.IVSRule => "IVS規則",
+                AlarmType.DeviceError => "設備異常",
+                AlarmType.DiskFull => "硬碟滿",
+                AlarmType.DiskError => "硬碟錯誤",
+                AlarmType.NetworkDisconnect => "網路斷線",
+                AlarmType.Tampering => "畫面篡改",
+                AlarmType.AudioDetect => "音頻偵測",
+                _ => "未知警報"
+            };
+        }
+
+        #endregion
+
         #region Button State Methods
 
         /// <summary>
@@ -1403,10 +1732,11 @@ namespace SentryX
                 _performanceManager?.StopMonitoring();
                 _playbackControlManager?.Cleanup(); // 新增：清理回放資源
                 _splitScreenManager?.StopAllVideoPlayers();
-                
+
                 // 🔥 新增：清理語音對講資源
                 _voiceIntercomManager?.Dispose();
-                
+                // 🔥 新增：清理警報訂閱資源
+                _alarmSubscriptionManager?.Dispose();
                 SimpleVideoPlayer.GlobalCleanup();
                 _deviceManager?.Close();
                 _playbackControlDialog?.Close(); // 新增：關閉回放控制視窗

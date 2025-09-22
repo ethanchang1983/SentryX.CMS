@@ -2,8 +2,8 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="SentryX" 
-        Height="700" Width="1280"
-        MinHeight="600" MinWidth="720"
+        Height="1050" Width="1680"
+        MinHeight="1050" MinWidth="1680"
         WindowStartupLocation="CenterScreen">
 
     <Grid>
@@ -13,12 +13,26 @@
             <RowDefinition Height="200" MinHeight="180"/>
         </Grid.RowDefinitions>
 
-        <!-- 工具列 - 添加語音接收按鈕 -->
+        <!-- 工具列 - 添加警報訂閱按鈕 -->
         <StackPanel Grid.Row="0" Orientation="Horizontal" Background="LightGray" Margin="2">
             <Button Name="DeviceManagerButton" Content="🔧 設備管理" Click="DeviceManagerButton_Click" 
                     ToolTip="開啟設備管理視窗" Margin="2"/>
             <Button Name="RefreshButton" Content="🔄 刷新" Click="RefreshButton_Click" 
                     ToolTip="刷新設備列表" Margin="2"/>
+
+            <!-- 新增：警報訂閱按鈕 -->
+            <Button Name="AlarmSubscribeButton" 
+                    Content="🔔 訂閱警報" 
+                    Width="100" 
+                    Height="35" 
+                    Margin="5,2"
+                    Background="#FF2196F3"
+                    Foreground="White"
+                    FontWeight="Bold"
+                    BorderThickness="0"
+                    Click="AlarmSubscribeButton_Click"
+                    ToolTip="點擊開始/停止訂閱設備警報事件"
+                    IsEnabled="True"/>
 
             <!-- 新增：PTZ控制按鈕 -->
             <Button Name="PTZControlButton" Content="🎮 PTZ控制" Click="PTZControlButton_Click" 
@@ -113,12 +127,14 @@
                        Text="總計: 0, 在線: 0"/>
         </StackPanel>
 
-        <!-- 主要內容區保持不變 -->
+        <!-- 主要內容區 - 修改為三欄佈局 -->
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="300"/>
+                <ColumnDefinition Width="250"/>
                 <ColumnDefinition Width="5"/>
                 <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="5"/>
+                <ColumnDefinition Width="280"/>
             </Grid.ColumnDefinitions>
 
             <!-- 左側：設備清單 -->
@@ -136,12 +152,12 @@
                 </ListBox>
             </DockPanel>
 
-            <!-- 中間分隔線 -->
+            <!-- 第一個分隔線 -->
             <GridSplitter Grid.Column="1" Width="5" 
                          HorizontalAlignment="Stretch" 
                          Background="Gray"/>
 
-            <!-- 右側：視頻顯示區 -->
+            <!-- 中間：視頻顯示區 -->
             <DockPanel Grid.Column="2">
                 <!-- 視頻控制按鈕和資訊顯示 -->
                 <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="5">
@@ -180,6 +196,110 @@
                 <!-- 視頻顯示區域 -->
                 <Grid Name="VideoDisplayGrid" Background="Black">
                     <!-- 動態生成的分割畫面將在這裡 -->
+                </Grid>
+            </DockPanel>
+
+            <!-- 第二個分隔線 -->
+            <GridSplitter Grid.Column="3" Width="5" 
+                         HorizontalAlignment="Stretch" 
+                         Background="Gray"/>
+
+            <!-- 右側：警報事件區域 -->
+            <DockPanel Grid.Column="4">
+                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="5">
+                    <TextBlock Text="警報事件" FontWeight="Bold" VerticalAlignment="Center"/>
+
+                    <!-- 警報統計顯示 -->
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="10,0,0,0">
+                        <TextBlock Name="AlarmCountTextBlock" Text="未訂閱" 
+                                   FontSize="12" Foreground="Gray" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- 警報事件列表 -->
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- 警報過濾工具欄 -->
+                    <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="5,0,5,5" 
+                                Background="LightGray" Height="30">
+                        <TextBlock Text="類型:" VerticalAlignment="Center" Margin="5,0"/>
+                        <ComboBox Name="AlarmTypeFilterComboBox" Width="80" Height="25"
+                                  SelectionChanged="AlarmTypeFilterComboBox_SelectionChanged"
+                                  ToolTip="篩選警報類型">
+                            <ComboBoxItem Content="全部" Tag="All" IsSelected="True"/>
+                            <ComboBoxItem Content="移動偵測" Tag="MotionDetect"/>
+                            <ComboBoxItem Content="視頻丟失" Tag="VideoLoss"/>
+                            <ComboBoxItem Content="視頻遮蔽" Tag="VideoBlind"/>
+                            <ComboBoxItem Content="IVS規則" Tag="IVSRule"/>
+                            <ComboBoxItem Content="設備異常" Tag="DeviceError"/>
+                        </ComboBox>
+
+                        <Button Name="ClearAlarmsButton" Content="🗑️" Width="25" Height="25" 
+                                Margin="5,0" Click="ClearAlarmsButton_Click"
+                                ToolTip="清除所有警報記錄"/>
+                    </StackPanel>
+
+                    <!-- 警報事件清單 -->
+                    <ListBox Name="AlarmListBox" Grid.Row="1" 
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Border BorderBrush="LightGray" BorderThickness="1" 
+                                        Margin="2" Padding="5" CornerRadius="3">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Background" Value="White"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsRead}" Value="False">
+                                                    <Setter Property="Background" Value="#FFF3E5F5"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding Priority}" Value="High">
+                                                    <Setter Property="BorderBrush" Value="Red"/>
+                                                    <Setter Property="BorderThickness" Value="2"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+
+                                    <StackPanel>
+                                        <!-- 警報標題行 -->
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{Binding TypeIcon}" FontSize="16" 
+                                                       VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                            <TextBlock Text="{Binding TypeName}" FontWeight="Bold" 
+                                                       FontSize="12" VerticalAlignment="Center"/>
+                                            <TextBlock Text="{Binding TimeDisplay}" FontSize="10" 
+                                                       Foreground="Gray" HorizontalAlignment="Right" 
+                                                       Margin="5,0,0,0"/>
+                                        </StackPanel>
+
+                                        <!-- 設備信息 -->
+                                        <TextBlock Text="{Binding DeviceName}" FontSize="11" 
+                                                   Foreground="Blue" Margin="0,2,0,0"/>
+
+                                        <!-- 警報描述 -->
+                                        <TextBlock Text="{Binding Description}" FontSize="10" 
+                                                   TextWrapping="Wrap" Margin="0,2,0,0"
+                                                   MaxHeight="40"/>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <!-- 無警報時的提示 -->
+                    <TextBlock Name="NoAlarmsTextBlock" Grid.Row="1" 
+                               Text="暫無警報事件" 
+                               HorizontalAlignment="Center" 
+                               VerticalAlignment="Center" 
+                               Foreground="Gray" 
+                               FontSize="14"
+                               Visibility="Collapsed"/>
                 </Grid>
             </DockPanel>
         </Grid>

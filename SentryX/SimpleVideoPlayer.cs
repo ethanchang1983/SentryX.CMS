@@ -20,6 +20,12 @@ namespace SentryX
         private IntPtr _displayHandle = IntPtr.Zero;
         private bool _isPlaying = false;
         private bool _disposed = false;
+        // 新增的類別成員變數（加在 SimpleVideoPlayer 類別頂部）
+        // 在類別頂部新增
+        private DateTime _lastIVSSetTime = DateTime.MinValue;
+        private bool _needRetryIVS = false;
+        private int _ivsRetryCount = 0;
+        private bool _ivsSetSuccessfully = false;
         // 將 _dataCallback 欄位宣告為可為 null，修正 CS8618
         private fRealDataCallBackEx2? _dataCallback;
         private DecodeMode _decodeMode = DecodeMode.Software;
@@ -108,65 +114,53 @@ namespace SentryX
 
                 if (_decodeMode == DecodeMode.Software)
                 {
-                    // 🔥 軟體解碼：使用大華 SDK 的 RenderPrivateData
                     if (_realPlayHandle != IntPtr.Zero)
                     {
                         result = NETClient.RenderPrivateData(_realPlayHandle, enable);
-                        
-                        if (result)
-                        {
-                            Debug.WriteLine($"🎯 軟體解碼 IVS 切換成功：{(enable ? "啟用" : "停用")}");
-                        }
-                        else
-                        {
-                            string error = NETClient.GetLastError();
-                            Debug.WriteLine($"軟體解碼 IVS 切換失敗：{error}");
-                        }
+                        Debug.WriteLine($"軟體解碼 IVS 設定結果: {result}");
                     }
                 }
                 else
                 {
-                    // 🔥 硬體解碼：使用 Play SDK 的 PLAY_RenderPrivateData
                     if (_playPort != -1)
                     {
-                        // 🔥 關鍵修正：硬體解碼需要確保播放已完全開始
-                        Thread.Sleep(100); // 短暫等待確保播放穩定
-                        
-                        result = PlaySDK.PLAY_RenderPrivateData(_playPort, enable);
-                        
-                        if (result)
+                        // 硬體解碼需要多次嘗試
+                        for (int attempt = 0; attempt < 3; attempt++)
                         {
-                            Debug.WriteLine($"🎯 硬體解碼 IVS 切換成功：{(enable ? "啟用" : "停用")}");
-                            
-                            // 🔥 新增：硬體解碼模式下強制刷新顯示
-                            if (_displayHandle != IntPtr.Zero)
-                            {
-                                // 使用 Win32 API 強制重繪窗口
-                                InvalidateRect(_displayHandle, IntPtr.Zero, false);
-                                UpdateWindow(_displayHandle);
-                                Debug.WriteLine("硬體解碼模式：已強制刷新顯示窗口");
-                            }
-                        }
-                        else
-                        {
-                            uint error = PlaySDK.PLAY_GetLastErrorEx();
-                            Debug.WriteLine($"硬體解碼 IVS 請求失敗，錯誤代碼：{error}");
-                            
-                            // 🔥 新增：嘗試重新設定 IVS（有時需要多次嘗試）
-                            Thread.Sleep(50);
-                            result = PlaySDK.PLAY_RenderPrivateData(_playPort, enable);
+                            result = PlaySDK.PLAY_RenderPrivateData(_playPort, enable, 0);
+
                             if (result)
                             {
-                                Debug.WriteLine($"🎯 硬體解碼 IVS 重試成功：{(enable ? "啟用" : "停用")}");
+                                Debug.WriteLine($"🎯 硬體解碼 IVS 設定成功 (第{attempt + 1}次嘗試): {(enable ? "啟用" : "停用")}");
+
+                                // 記錄設定時間
+                                _lastIVSSetTime = DateTime.Now;
+
+                                // 驗證設定是否真的生效
+                                Thread.Sleep(50);
+
+                                // 強制刷新
+                                if (_displayHandle != IntPtr.Zero)
+                                {
+                                    InvalidateRect(_displayHandle, IntPtr.Zero, true); // 使用 true 強制擦除背景
+                                    UpdateWindow(_displayHandle);
+                                }
+
+                                // 更新狀態標記
+                                _ivsSetSuccessfully = enable;
+
+                                break;
                             }
                             else
                             {
-                                Debug.WriteLine($"硬體解碼 IVS 重試仍失敗");
+                                uint error = PlaySDK.PLAY_GetLastErrorEx();
+                                Debug.WriteLine($"硬體解碼 IVS 設定失敗 (嘗試{attempt + 1}), 錯誤: {error}");
+                                Thread.Sleep(100);
                             }
                         }
                     }
                 }
-                
+
                 return result;
             }
             catch (Exception ex)
@@ -309,14 +303,12 @@ namespace SentryX
             {
                 Debug.WriteLine("🔧 開始硬體解碼模式（支援 IVS）");
 
-                // 🔥 使用原有的 InitializePlaySDK 方法確保 GPU 正常工作
                 if (!InitializePlaySDK())
                 {
                     Debug.WriteLine("❌ 硬體解碼：Play SDK 初始化失敗");
                     return false;
                 }
 
-                // 🔥 使用原有的 StartReceiveData 方法
                 if (!StartReceiveData(deviceHandle, channel))
                 {
                     Debug.WriteLine("❌ 硬體解碼：開始接收數據失敗");
@@ -324,42 +316,29 @@ namespace SentryX
                     return false;
                 }
 
-                // 🔥 修正：硬體解碼的 IVS 設定需要在數據流開始後
+                // 🔥 重置 IVS 相關狀態
+                _ivsRetryCount = 0;
+                _ivsSetSuccessfully = false;
+
+                // 🔥 立即嘗試設定 IVS（但不等待太久）
                 if (_ivsRenderEnabled)
                 {
-                    // 等待數據流穩定
-                    Thread.Sleep(500);
-                    
-                    bool ivsResult = PlaySDK.PLAY_RenderPrivateData(_playPort, true);
-                    Debug.WriteLine($"硬體解碼 IVS 設定結果: {ivsResult}");
-                    
-                    if (!ivsResult)
+                    Thread.Sleep(100); // 只等待 100ms
+
+                    bool ivsResult = PlaySDK.PLAY_RenderPrivateData(_playPort, true, 0);
+                    if (ivsResult)
+                    {
+                        _ivsSetSuccessfully = true;
+                        Debug.WriteLine($"🎯 硬體解碼 IVS 初始設定成功");
+                    }
+                    else
                     {
                         uint error = PlaySDK.PLAY_GetLastErrorEx();
-                        Debug.WriteLine($"⚠️ 硬體解碼 IVS 設定失敗，錯誤代碼：{error}，但繼續播放");
-                        
-                        // 🔥 新增：多次重試 IVS 設定
-                        for (int retry = 0; retry < 3; retry++)
-                        {
-                            Thread.Sleep(200);
-                            ivsResult = PlaySDK.PLAY_RenderPrivateData(_playPort, true);
-                            if (ivsResult)
-                            {
-                                Debug.WriteLine($"🎯 硬體解碼 IVS 重試 {retry + 1} 次成功");
-                                break;
-                            }
-                        }
-                    }
-                    
-                    // 🔥 新增：強制刷新顯示
-                    if (_displayHandle != IntPtr.Zero)
-                    {
-                        InvalidateRect(_displayHandle, IntPtr.Zero, false);
-                        UpdateWindow(_displayHandle);
+                        Debug.WriteLine($"⚠️ 硬體解碼 IVS 初始設定失敗，錯誤碼：{error}，將在數據流中重試");
                     }
                 }
 
-                Debug.WriteLine($"⚡ 硬體解碼模式啟動成功（GPU 解碼 + IVS: {_ivsRenderEnabled}）");
+                Debug.WriteLine($"⚡ 硬體解碼模式啟動成功（GPU 解碼，IVS 狀態: {(_ivsSetSuccessfully ? "已啟用" : "待設定")}）");
                 return true;
             }
             catch (Exception ex)
@@ -369,6 +348,7 @@ namespace SentryX
                 return false;
             }
         }
+
 
         // === 🔥 保持原有的方法確保硬體解碼正常工作 ===
 
@@ -403,6 +383,10 @@ namespace SentryX
         {
             try
             {
+                // 取得 SDK 版本
+                uint version = PlaySDK.PLAY_GetSdkVersion();
+                Debug.WriteLine($"✅ PlaySDK 版本: 0x{version:X8}");
+
                 if (!PlaySDK.PLAY_GetFreePort(ref _playPort))
                 {
                     Debug.WriteLine("無法取得 Play SDK 端口");
@@ -421,17 +405,39 @@ namespace SentryX
                 uint bufferSize = CalculateOptimalBufferSize();
                 if (!PlaySDK.PLAY_OpenStream(_playPort, IntPtr.Zero, 0, bufferSize))
                 {
-                    Debug.WriteLine($"開啟串流失敗，緩衝區大小: {bufferSize}");
+                    uint error = PlaySDK.PLAY_GetLastErrorEx();
+                    Debug.WriteLine($"開啟串流失敗，錯誤碼: {error}");
                     return false;
+                }
+
+                // 🔥 重要：在 PLAY_Play 之前設定 IVS
+                if (_ivsRenderEnabled)
+                {
+                    bool prePlayIVS = PlaySDK.PLAY_RenderPrivateData(_playPort, true, 0);
+                    Debug.WriteLine($"Play前 IVS 設定：{prePlayIVS}");
                 }
 
                 if (!PlaySDK.PLAY_Play(_playPort, _displayHandle))
                 {
-                    Debug.WriteLine("Play SDK 播放失敗");
+                    uint error = PlaySDK.PLAY_GetLastErrorEx();
+                    Debug.WriteLine($"Play SDK 播放失敗，錯誤碼: {error}");
                     return false;
                 }
 
-                Debug.WriteLine($"✅ Play SDK 播放器初始化完成，端口: {_playPort}");
+                // 🔥 在 PLAY_Play 之後再設定一次
+                if (_ivsRenderEnabled)
+                {
+                    Thread.Sleep(100);
+                    bool postPlayIVS = PlaySDK.PLAY_RenderPrivateData(_playPort, true, 0);
+                    Debug.WriteLine($"Play後 IVS 設定：{postPlayIVS}");
+
+                    if (postPlayIVS)
+                    {
+                        _ivsSetSuccessfully = true;
+                    }
+                }
+
+                Debug.WriteLine($"✅ Play SDK 播放器初始化完成");
                 return true;
             }
             catch (Exception ex)
@@ -494,27 +500,23 @@ namespace SentryX
         {
             try
             {
-                // 🔥 第一層保護：軟體解碼模式絕對不應該進入這裡
+                // 保護檢查（保持原樣）
                 if (_decodeMode == DecodeMode.Software)
                 {
-                    Debug.WriteLine("🚨 嚴重警告：軟體解碼模式收到數據回調！這會導致流量翻倍！");
+                    Debug.WriteLine("🚨 嚴重警告：軟體解碼模式收到數據回調！");
                     return;
                 }
 
-                // 🔥 第二層保護：檢查是否為硬體解碼模式
                 if (_decodeMode != DecodeMode.Hardware && _decodeMode != DecodeMode.Auto)
                 {
-                    Debug.WriteLine($"⚠️ 警告：{_decodeMode} 模式不應該收到數據回調");
                     return;
                 }
 
-                // 🔥 第三層保護：確保有效的 Play SDK 端口
                 if (!_isPlaying || _playPort == -1)
                 {
                     return;
                 }
 
-                // 🔥 第四層保護：數據有效性檢查
                 if (pBuffer == IntPtr.Zero || dwBufSize == 0)
                 {
                     _droppedFrameCount++;
@@ -523,13 +525,41 @@ namespace SentryX
 
                 Interlocked.Increment(ref _dataReceiveCount);
 
-                // 只有硬體解碼模式才會執行到這裡
+                // 🔥 修正：IVS 重試機制
+                if (_ivsRenderEnabled && !_ivsSetSuccessfully)
+                {
+                    // 在數據流穩定後嘗試
+                    if (_dataReceiveCount == 30 || _dataReceiveCount == 60 || _dataReceiveCount == 90)
+                    {
+                        bool ivsResult = PlaySDK.PLAY_RenderPrivateData(_playPort, true, 0);
+
+                        if (ivsResult)
+                        {
+                            _ivsSetSuccessfully = true;
+                            Debug.WriteLine($"🎯 IVS 在第 {_dataReceiveCount} 幀成功啟用");
+
+                            // 強制刷新
+                            if (_displayHandle != IntPtr.Zero)
+                            {
+                                InvalidateRect(_displayHandle, IntPtr.Zero, true);
+                                UpdateWindow(_displayHandle);
+                            }
+                        }
+                        else
+                        {
+                            uint error = PlaySDK.PLAY_GetLastErrorEx();
+                            Debug.WriteLine($"⚠️ IVS 設定失敗（幀 {_dataReceiveCount}），錯誤: {error}");
+                        }
+                    }
+                }
+
+                // 統計更新
                 if (_dataReceiveCount % 30 == 0)
                 {
                     UpdateVideoStatistics(dwBufSize, dwDataType);
                 }
 
-                // 將數據送給 Play SDK 進行 GPU 解碼
+                // 數據輸入
                 bool result = PlaySDK.PLAY_InputData(_playPort, pBuffer, dwBufSize);
 
                 if (!result)
@@ -539,34 +569,29 @@ namespace SentryX
                     {
                         _bufferResetCount++;
                         PlaySDK.PLAY_ResetSourceBuffer(_playPort);
-                        
+
                         if (_bufferResetCount % 20 == 0)
                         {
-                            Debug.WriteLine($"🔄 GPU 解碼緩衝區重置 (第{_bufferResetCount}次)");
-                        }
-                    }
-                    else
-                    {
-                        _consecutiveErrorCount++;
-                        if (_consecutiveErrorCount % 50 == 0)
-                        {
-                            Debug.WriteLine($"❌ GPU 解碼錯誤，錯誤代碼: {error}");
+                            Debug.WriteLine($"🔄 緩衝區重置 (第{_bufferResetCount}次)");
                         }
                     }
                 }
                 else
                 {
                     _consecutiveErrorCount = 0;
-                    
+
                     if (_dataReceiveCount % 100 == 0)
                     {
-                        Debug.WriteLine($"✅ GPU 解碼成功，端口={_playPort}, 計數={_dataReceiveCount}");
+                        // 🔥 修正：正確顯示 IVS 狀態
+                        string ivsStatus = _ivsSetSuccessfully && _ivsRenderEnabled ? "IVS啟用" :
+                                          _ivsRenderEnabled ? "IVS待設定" : "IVS停用";
+                        Debug.WriteLine($"✅ GPU 解碼運行，端口={_playPort}, 幀={_dataReceiveCount}, {ivsStatus}");
                     }
                 }
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"❌ GPU 解碼數據處理異常：{ex.Message}");
+                Debug.WriteLine($"❌ 數據處理異常：{ex.Message}");
             }
         }
 
@@ -731,6 +756,28 @@ namespace SentryX
                 Interlocked.Decrement(ref _globalPlayerCount);
                 _disposed = true;
                 Debug.WriteLine($"SimpleVideoPlayer 已銷毀，剩餘: {_globalPlayerCount}");
+            }
+        }
+
+        public void TestIVSToggle()
+        {
+            if (_playPort == -1) return;
+
+            Debug.WriteLine("=== 測試 IVS 切換 ===");
+
+            // 關閉
+            bool offResult = PlaySDK.PLAY_RenderPrivateData(_playPort, false, 0);
+            Debug.WriteLine($"IVS 關閉: {offResult}");
+            Thread.Sleep(1000);
+
+            // 開啟
+            bool onResult = PlaySDK.PLAY_RenderPrivateData(_playPort, true, 0);
+            Debug.WriteLine($"IVS 開啟: {onResult}");
+
+            if (!onResult)
+            {
+                uint error = PlaySDK.PLAY_GetLastErrorEx();
+                Debug.WriteLine($"錯誤碼: {error}");
             }
         }
 

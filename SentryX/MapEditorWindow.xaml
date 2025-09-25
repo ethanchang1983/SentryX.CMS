@@ -1,0 +1,235 @@
+﻿<Window x:Class="SentryX.MapEditorWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="電子地圖編輯器" 
+        Height="900" Width="1400"
+        MinHeight="600" MinWidth="800"
+        WindowStartupLocation="CenterScreen">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- 工具列 -->
+        <ToolBar Grid.Row="0" Height="40">
+            <!-- 地圖管理 -->
+            <Button Name="LoadMapButton" 
+                    Content="📁 載入地圖" 
+                    Padding="10,5"
+                    Click="LoadMapButton_Click"
+                    ToolTip="載入地圖圖片檔案"/>
+
+            <Button Name="ClearMapButton" 
+                    Content="🗑️ 清除地圖" 
+                    Padding="10,5"
+                    Click="ClearMapButton_Click"
+                    ToolTip="清除目前的地圖"
+                    IsEnabled="False"/>
+
+            <Separator/>
+
+            <!-- 設備管理 -->
+            <Button Name="AddDeviceButton" 
+                    Content="📷 新增設備" 
+                    Padding="10,5"
+                    Click="AddDeviceButton_Click"
+                    ToolTip="在地圖上新增設備標記"
+                    IsEnabled="False"/>
+
+            <Button Name="EditModeButton" 
+                    Content="✏️ 編輯模式" 
+                    Padding="10,5"
+                    Click="EditModeButton_Click"
+                    ToolTip="切換編輯/檢視模式"
+                    IsEnabled="False"/>
+
+            <Button Name="DeleteSelectedButton" 
+                    Content="❌ 刪除選中" 
+                    Padding="10,5"
+                    Click="DeleteSelectedButton_Click"
+                    ToolTip="刪除選中的設備標記"
+                    IsEnabled="False"/>
+
+            <Separator/>
+
+            <!-- 縮放控制 -->
+            <TextBlock Text="縮放:" VerticalAlignment="Center" Margin="5,0"/>
+            <Button Name="ZoomInButton" 
+                    Content="➕" 
+                    Width="30" 
+                    Click="ZoomInButton_Click"
+                    ToolTip="放大"/>
+
+            <TextBlock Name="ZoomLevelText" 
+                       Text="100%" 
+                       Width="50" 
+                       TextAlignment="Center"
+                       VerticalAlignment="Center"/>
+
+            <Button Name="ZoomOutButton" 
+                    Content="➖" 
+                    Width="30" 
+                    Click="ZoomOutButton_Click"
+                    ToolTip="縮小"/>
+
+            <Button Name="ZoomResetButton" 
+                    Content="🔄" 
+                    Width="30" 
+                    Click="ZoomResetButton_Click"
+                    ToolTip="重設縮放"/>
+
+            <Separator/>
+
+            <!-- 檔案操作 -->
+            <Button Name="SaveMapButton" 
+                    Content="💾 儲存配置" 
+                    Padding="10,5"
+                    Click="SaveMapButton_Click"
+                    ToolTip="儲存地圖配置"
+                    IsEnabled="False"/>
+
+            <Button Name="LoadConfigButton" 
+                    Content="📂 載入配置" 
+                    Padding="10,5"
+                    Click="LoadConfigButton_Click"
+                    ToolTip="載入地圖配置"/>
+        </ToolBar>
+
+        <!-- 主要內容區 -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="250"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- 左側：設備列表 -->
+            <GroupBox Grid.Column="0" Header="可用設備" Margin="5">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBox Name="DeviceSearchBox" 
+                             Grid.Row="0"
+                             Text="搜尋設備..." 
+                             Foreground="Gray"
+                             Margin="5"
+                             GotFocus="SearchBox_GotFocus"
+                             LostFocus="SearchBox_LostFocus"
+                             TextChanged="SearchBox_TextChanged"/>
+
+                    <ListBox Name="AvailableDevicesList" 
+                             Grid.Row="1"
+                             Margin="5"
+                             MouseDoubleClick="AvailableDevicesList_MouseDoubleClick"
+                             SelectionMode="Single">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Border BorderThickness="1" 
+                                        BorderBrush="LightGray" 
+                                        CornerRadius="3" 
+                                        Padding="5" 
+                                        Margin="2">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Name}" 
+                                                   FontWeight="Bold"/>
+                                        <TextBlock Text="{Binding IP}" 
+                                                   FontSize="10" 
+                                                   Foreground="Gray"/>
+                                        <TextBlock FontSize="10">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsOnline}" Value="True">
+                                                            <Setter Property="Text" Value="🟢 在線"/>
+                                                            <Setter Property="Foreground" Value="Green"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding IsOnline}" Value="False">
+                                                            <Setter Property="Text" Value="🔴 離線"/>
+                                                            <Setter Property="Foreground" Value="Red"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+            </GroupBox>
+
+            <!-- 右側：地圖顯示區 -->
+            <GroupBox Grid.Column="1" Header="地圖區域" Margin="5">
+                <ScrollViewer Name="MapScrollViewer" 
+                              HorizontalScrollBarVisibility="Auto"
+                              VerticalScrollBarVisibility="Auto"
+                              Background="#F0F0F0">
+
+                    <Grid Name="MapContainer"
+                          MouseWheel="MapContainer_MouseWheel"
+                          ClipToBounds="True">
+
+                        <!-- 縮放變換 -->
+                        <Grid.LayoutTransform>
+                            <ScaleTransform x:Name="MapScaleTransform" 
+                                            ScaleX="1" 
+                                            ScaleY="1"/>
+                        </Grid.LayoutTransform>
+
+                        <!-- Canvas 用於放置地圖和設備圖標 -->
+                        <Canvas Name="MapCanvas" 
+                                Width="1000" 
+                                Height="800"
+                                Background="White"
+                                AllowDrop="True"
+                                Drop="MapCanvas_Drop"
+                                DragOver="MapCanvas_DragOver"
+                                MouseLeftButtonDown="MapCanvas_MouseLeftButtonDown"
+                                MouseMove="MapCanvas_MouseMove"
+                                MouseLeftButtonUp="MapCanvas_MouseLeftButtonUp"
+                                MouseRightButtonDown="MapCanvas_MouseRightButtonDown">
+
+                            <!-- 背景圖片 -->
+                            <Image Name="MapImage" 
+                                   Stretch="None"
+                                   Canvas.Left="0"
+                                   Canvas.Top="0"/>
+
+                            <!-- 設備圖標將動態添加到這裡 -->
+
+                        </Canvas>
+                    </Grid>
+                </ScrollViewer>
+            </GroupBox>
+        </Grid>
+
+        <!-- 狀態列 -->
+        <StatusBar Grid.Row="2">
+            <StatusBarItem>
+                <TextBlock Name="StatusText" Text="就緒"/>
+            </StatusBarItem>
+            <Separator/>
+            <StatusBarItem>
+                <TextBlock Name="MapInfoText" Text="未載入地圖"/>
+            </StatusBarItem>
+            <Separator/>
+            <StatusBarItem>
+                <TextBlock Name="DeviceCountText" Text="設備數量: 0"/>
+            </StatusBarItem>
+            <Separator/>
+            <StatusBarItem>
+                <TextBlock Name="MousePositionText" Text="座標: 0, 0"/>
+            </StatusBarItem>
+            <Separator/>
+            <StatusBarItem>
+                <TextBlock Name="EditModeText" Text="檢視模式" FontWeight="Bold"/>
+            </StatusBarItem>
+        </StatusBar>
+    </Grid>
+</Window>

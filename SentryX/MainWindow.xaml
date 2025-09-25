@@ -116,6 +116,13 @@
                 <ComboBoxItem Content="硬體解碼" Tag="Hardware"/>
                 <ComboBoxItem Content="自動選擇" Tag="Auto"/>
             </ComboBox>
+            
+            <Button x:Name="OpenMapEditorButton"
+        Content="開啟電子地圖"
+        Width="120"
+        Height="40"
+        Margin="10"
+        Click="OpenMapEditorButton_Click"/>
 
             <Separator Width="10"/>
             <TextBlock Text="系統狀態:" VerticalAlignment="Center" FontWeight="Bold"/>

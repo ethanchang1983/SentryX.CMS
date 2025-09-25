@@ -1606,6 +1606,13 @@ namespace SentryX
 
         #endregion
 
+        private void OpenMapEditorButton_Click(object sender, RoutedEventArgs e)
+        {
+            var mapEditorWindow = new MapEditorWindow();
+            mapEditorWindow.Owner = this; // 可選，讓主視窗為父視窗
+            mapEditorWindow.Show();
+        }
+
         #region Public Methods for Managers
 
         public void OnDeviceChanged(DeviceInfo device)

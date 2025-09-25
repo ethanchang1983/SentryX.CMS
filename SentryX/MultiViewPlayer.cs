@@ -257,9 +257,9 @@ namespace SentryX
                 // 確保顯示狀態正確
                 EnsureProperDisplayState();
 
-                // 🔥 關鍵修正：根據解碼模式設定正確的 IVS 參數
-                bool enableIVS = (decodeMode == DecodeMode.Software); // 只有軟體解碼才啟用 IVS
-                
+                // ✅ 修正：兩種解碼模式都預設啟用 IVS
+                bool enableIVS = true; // 改為都啟用
+
                 // 建立新的播放器
                 _videoPlayer = new SimpleVideoPlayer(decodeMode, streamType, enableIVS);
                 

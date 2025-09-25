@@ -38,6 +38,12 @@ namespace SentryX
         private List<Device> devices = new List<Device>();
         private bool isEditMode = false;
         private bool isDragging = false;
+        private bool isPanning = false;
+        private bool isDraggingMap = false; // 新增：是否在拖動底圖
+        // 修正 CS0104: 明確指定 Point 為 System.Windows.Point
+        private System.Windows.Point panStartPoint;
+        private double panStartHorizontalOffset;
+        private double panStartVerticalOffset;
         // 將 Point 的宣告明確指定為 System.Windows.Point
         private System.Windows.Point dragStartPoint;
         private UIElement? draggedElement; // 允許為 null
@@ -55,6 +61,7 @@ namespace SentryX
             InitializeComponent();
             InitializeDeviceList();
             UpdateButtonStates();
+            EnsureMapImageExists(); // 新增這行
             // 確保 MapData 資料夾存在
             if (!Directory.Exists(mapDataFolder))
             {
@@ -108,20 +115,38 @@ namespace SentryX
 
         private void ClearMapButton_Click(object sender, RoutedEventArgs e)
         {
+            // 先移除現有的設備圖標（Border），但保留 MapImage
+            var existingDevices = MapCanvas.Children.OfType<Border>().ToList();
+            foreach (var dev in existingDevices)
+            {
+                MapCanvas.Children.Remove(dev);
+            }
+
+            // 清空底圖 Source，但不移除 MapImage 控件
             MapImage.Source = null;
-            MapCanvas.Children.Clear();
+
+            // 重置設備位置
             devices.ForEach(d => { d.X = 0; d.Y = 0; });
+
             MapInfoText.Text = "未載入地圖";
             DeviceCountText.Text = "設備數量: 0";
             UpdateButtonStates();
         }
 
-        private void AddDeviceButton_Click(object sender, RoutedEventArgs e)
+        // 修正 CS0104: 明確指定 Image 為 System.Windows.Controls.Image
+        private void EnsureMapImageExists()
         {
-            if (AvailableDevicesList.SelectedItem is Device selectedDevice)
+            if (!MapCanvas.Children.Contains(MapImage))
             {
-                AddDeviceToCanvas(selectedDevice, 50, 50);
-                UpdateButtonStates();
+                // 重新創建 MapImage（匹配 XAML 定義）
+                MapImage = new System.Windows.Controls.Image
+                {
+                    Name = "MapImage",
+                    Stretch = Stretch.None
+                };
+                Canvas.SetLeft(MapImage, 0);
+                Canvas.SetTop(MapImage, 0);
+                MapCanvas.Children.Insert(0, MapImage); // 插入到最底層，作為背景
             }
         }
 
@@ -153,7 +178,20 @@ namespace SentryX
             Canvas.SetLeft(deviceIcon, x);
             Canvas.SetTop(deviceIcon, y);
             MapCanvas.Children.Add(deviceIcon);
-            DeviceCountText.Text = $"設備數量: {MapCanvas.Children.Count}";
+            DeviceCountText.Text = $"設備數量: {MapCanvas.Children.OfType<Border>().Count()}";
+        }
+
+        private void AddDeviceButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (AvailableDevicesList.SelectedItem is Device selectedDevice)
+            {
+                AddDeviceToCanvas(selectedDevice, 50, 50); // 新增設備到畫布，預設位置 50,50
+                UpdateButtonStates(); // 更新按鈕狀態
+            }
+            else
+            {
+                System.Windows.MessageBox.Show("請先選擇一個設備。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
         }
 
         private void EditModeButton_Click(object sender, RoutedEventArgs e)
@@ -171,7 +209,7 @@ namespace SentryX
             {
                 MapCanvas.Children.Remove(element);
             }
-            DeviceCountText.Text = $"設備數量: {MapCanvas.Children.Count}";
+            DeviceCountText.Text = $"設備數量: {MapCanvas.Children.OfType<Border>().Count()}";
             UpdateButtonStates();
         }
 
@@ -304,7 +342,7 @@ namespace SentryX
                             AddDeviceToCanvas(device, device.X, device.Y);
                     }
                     AvailableDevicesList.ItemsSource = devices;
-                    DeviceCountText.Text = $"設備數量: {MapCanvas.Children.Count - 1}"; // 減 1，因為 MapImage 佔一個
+                    DeviceCountText.Text = $"設備數量: {MapCanvas.Children.OfType<Border>().Count()}"; // 減 1，因為 MapImage 佔一個
                     UpdateButtonStates();
                     StatusText.Text = "配置已從 MapData/config.xml 載入";
                 }
@@ -353,19 +391,35 @@ namespace SentryX
             }
         }
 
-        private void MapCanvas_MouseLeftButtonDown(object sender, System.Windows.Input.MouseEventArgs e)
+        private void MapCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
-            if (!isEditMode) return;
-
-            var point = e.GetPosition(MapCanvas);
-            var hitElement = MapCanvas.InputHitTest(point) as UIElement;
-
-            if (hitElement is Border border && border.Tag is Device)
+            if (isEditMode)
             {
-                isDragging = true;
-                draggedElement = border;
-                dragStartPoint = point;
-                border.BorderBrush = System.Windows.Media.Brushes.Red;
+                // 原有邏輯：編輯模式下拖動設備
+                var point = e.GetPosition(MapCanvas);
+                var hitElement = MapCanvas.InputHitTest(point) as UIElement;
+
+                if (hitElement is Border border && border.Tag is Device)
+                {
+                    isDragging = true;
+                    draggedElement = border;
+                    dragStartPoint = point;
+                    border.BorderBrush = System.Windows.Media.Brushes.Red;
+                    e.Handled = true;
+                    return; // 如果擊中設備，結束不進入拖動底圖
+                }
+            }
+
+            // 非編輯模式或未擊中設備：開始拖動底圖（如果有地圖）
+            if (MapImage.Source != null)
+            {
+                isDraggingMap = true;
+                dragStartPoint = e.GetPosition(MapCanvas); // 記錄起始位置
+                MapCanvas.CaptureMouse(); // 捕捉滑鼠
+
+                // 新增：變更游標為小手
+                MapCanvas.Cursor = System.Windows.Input.Cursors.Hand;
+
                 e.Handled = true;
             }
         }
@@ -374,6 +428,7 @@ namespace SentryX
         {
             if (isDragging && draggedElement != null)
             {
+                // 原有邏輯：拖動設備
                 var currentPoint = e.GetPosition(MapCanvas);
                 var offset = currentPoint - dragStartPoint;
                 dragStartPoint = currentPoint;
@@ -392,15 +447,60 @@ namespace SentryX
 
                 MousePositionText.Text = $"座標: {newX:0}, {newY:0}";
             }
+            else if (isDraggingMap)
+            {
+                // 新邏輯：拖動底圖，並同步設備位置
+                var currentPoint = e.GetPosition(MapCanvas);
+                var offset = currentPoint - dragStartPoint;
+                dragStartPoint = currentPoint;
+
+                // 移動底圖
+                double newMapLeft = Canvas.GetLeft(MapImage) + offset.X;
+                double newMapTop = Canvas.GetTop(MapImage) + offset.Y;
+                Canvas.SetLeft(MapImage, newMapLeft);
+                Canvas.SetTop(MapImage, newMapTop);
+
+                // 同步移動所有設備，保持相對位置
+                foreach (var child in MapCanvas.Children.OfType<Border>())
+                {
+                    if (child.Tag is Device)
+                    {
+                        double devLeft = Canvas.GetLeft(child) + offset.X;
+                        double devTop = Canvas.GetTop(child) + offset.Y;
+                        Canvas.SetLeft(child, devLeft);
+                        Canvas.SetTop(child, devTop);
+
+                        // 更新 Device 的 X/Y
+                        if (child.Tag is Device dev)
+                        {
+                            dev.X = devLeft;
+                            dev.Y = devTop;
+                        }
+                    }
+                }
+
+                MousePositionText.Text = $"底圖座標: {newMapLeft:0}, {newMapTop:0}";
+            }
         }
 
-        private void MapCanvas_MouseLeftButtonUp(object sender, System.Windows.Input.MouseEventArgs e)
+        private void MapCanvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
         {
             if (isDragging && draggedElement is Border border)
             {
+                // 原有邏輯：結束設備拖動
                 border.BorderBrush = System.Windows.Media.Brushes.Black;
                 isDragging = false;
                 draggedElement = null;
+            }
+
+            if (isDraggingMap)
+            {
+                // 結束拖動底圖
+                isDraggingMap = false;
+                MapCanvas.ReleaseMouseCapture();
+
+                // 恢復游標為箭頭
+                MapCanvas.Cursor = System.Windows.Input.Cursors.Arrow;
             }
         }
 

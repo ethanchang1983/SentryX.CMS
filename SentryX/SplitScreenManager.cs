@@ -4,6 +4,8 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Diagnostics;
+using System.Threading.Tasks;
+using System.Threading;
 
 namespace SentryX
 {
@@ -14,11 +16,11 @@ namespace SentryX
         private MultiViewPlayer? _selectedPlayer = null;
         private int _currentSplitCount = 1;
 
-        // 流暢切換相關變數 - 不停止播放，只切換顯示
+        // 流暢切換相關變數
         private bool _isFullScreenMode = false;
         private MultiViewPlayer? _fullScreenPlayer = null;
         private int _previousSplitCount = 1;
-        private List<FrameworkElement> _hiddenPlayers = new(); // 隱藏的播放器
+        private List<FrameworkElement> _hiddenPlayers = new();
 
         public List<MultiViewPlayer> VideoPlayers => _videoPlayers;
         public MultiViewPlayer? SelectedPlayer => _selectedPlayer;
@@ -33,6 +35,7 @@ namespace SentryX
             _mainWindow = mainWindow;
         }
 
+        // === 原有方法保持不變，但修改建構 MultiViewPlayer ===
         public void CreateSplitScreenLayout(int splitCount)
         {
             if (!_mainWindow.UIManager.IsUIInitialized)
@@ -73,7 +76,8 @@ namespace SentryX
                 {
                     for (int col = 0; col < gridSize && panelIndex < splitCount; col++)
                     {
-                        var player = new MultiViewPlayer(panelIndex);
+                        // 🔥 修改：傳遞 _mainWindow 到 MultiViewPlayer 建構子
+                        var player = new MultiViewPlayer(panelIndex, _mainWindow);
                         player.Selected += OnPlayerSelected;
                         player.DoubleClicked += OnPlayerDoubleClicked;
                         _videoPlayers.Add(player);
@@ -104,6 +108,217 @@ namespace SentryX
             }
         }
 
+        /// <summary>
+        /// 🔥 優化版：停止所有視頻播放器 - 使用並行處理，同時清除所有畫面
+        /// </summary>
+        public void StopAllVideoPlayers()
+        {
+            try
+            {
+                if (_videoPlayers.Count == 0) return;
+
+                var stopwatch = Stopwatch.StartNew();
+                Console.WriteLine($"開始並行停止 {_videoPlayers.Count} 個播放器");
+
+                // 第一步：並行清除所有選中狀態和停止播放
+                var tasks = new List<Task>();
+                var semaphore = new SemaphoreSlim(Environment.ProcessorCount * 2); // 限制並行數量
+
+                foreach (var player in _videoPlayers)
+                {
+                    var task = Task.Run(async () =>
+                    {
+                        await semaphore.WaitAsync();
+                        try
+                        {
+                            // 立即清除選中狀態
+                            player.ForceClearSelectedState();
+
+                            // 停止播放
+                            player.StopPlay();
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"停止播放器 {player.Index} 時發生錯誤: {ex.Message}");
+                        }
+                        finally
+                        {
+                            semaphore.Release();
+                        }
+                    });
+                    tasks.Add(task);
+                }
+
+                // 等待所有停止操作完成
+                Task.WaitAll(tasks.ToArray(), TimeSpan.FromSeconds(3));
+
+                // 第二步：清理事件訂閱和釋放資源 - 確保在 UI 執行緒上執行
+                _mainWindow.Dispatcher.Invoke(() =>
+                {
+                    foreach (var player in _videoPlayers.ToList())  // ToList 避免迭代中修改
+                    {
+                        try
+                        {
+                            player.Selected -= OnPlayerSelected;
+                            player.DoubleClicked -= OnPlayerDoubleClicked;
+                            player.Dispose();
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"清理播放器 {player.Index} 時發生錯誤: {ex.Message}");
+                        }
+                    }
+
+                    // 清空集合
+                    _videoPlayers.Clear();
+                    _selectedPlayer = null;
+
+                    // 重置全螢幕相關狀態
+                    _isFullScreenMode = false;
+                    _fullScreenPlayer = null;
+                    _hiddenPlayers.Clear();
+                });
+
+                stopwatch.Stop();
+                Console.WriteLine($"所有播放器已停止，耗時: {stopwatch.ElapsedMilliseconds}ms");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"並行停止所有播放器時發生異常: {ex.Message}");
+                // 如果並行處理失敗，回退到逐個處理
+                StopAllVideoPlayersFallback();
+            }
+        }
+
+        /// <summary>
+        /// 後備方案：如果並行處理失敗，使用傳統方式
+        /// </summary>
+        private void StopAllVideoPlayersFallback()
+        {
+            _mainWindow.Dispatcher.Invoke(() =>
+            {
+                foreach (var player in _videoPlayers.ToList())
+                {
+                    try
+                    {
+                        player.ForceClearSelectedState();
+                        player.StopPlay();
+                        player.Selected -= OnPlayerSelected;
+                        player.DoubleClicked -= OnPlayerDoubleClicked;
+                        player.Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Fallback 清理播放器 {player.Index} 時發生錯誤: {ex.Message}");
+                    }
+                }
+
+                _videoPlayers.Clear();
+                _selectedPlayer = null;
+                _isFullScreenMode = false;
+                _fullScreenPlayer = null;
+                _hiddenPlayers.Clear();
+            });
+        }
+
+        /// <summary>
+        /// 🔥 批次停止播放（只停止播放，不釋放播放器） - 優化版
+        /// </summary>
+        public async Task StopAllPlaybackAsync()
+        {
+            try
+            {
+                if (!HasAnyPlayerPlaying())
+                {
+                    _mainWindow.Dispatcher.Invoke(() => _mainWindow.ShowMessage("沒有正在播放的視頻"));
+                    return;
+                }
+
+                var stopwatch = Stopwatch.StartNew();
+                var playingPlayers = _videoPlayers.Where(p => p.IsPlaying).ToList();
+                _mainWindow.Dispatcher.Invoke(() => _mainWindow.ShowMessage($"正在停止 {playingPlayers.Count} 個視頻..."));
+
+                // 先黑屏 - await 確保視覺統一
+                var blackScreenTasks = playingPlayers.Select(player => Task.Run(() => player.QuickBlackScreen())).ToArray();
+                await Task.WhenAll(blackScreenTasks); // 等待黑屏完成
+
+                // 並行停止 - 移除額外 RefreshDisplay()
+                var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount / 2 }; // 限制並行，防 Dispatcher 過載
+                var stopTasks = playingPlayers.Select(player => Task.Run(() =>
+                {
+                    try
+                    {
+                        player.StopPlay(); // 已包含 RefreshDisplay()
+                        player.SetPlaybackMode(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"停止播放器 {player.Index} 時發生錯誤: {ex.Message}");
+                    }
+                })).ToArray();
+
+                await Task.WhenAll(stopTasks);
+
+                stopwatch.Stop();
+                _mainWindow.Dispatcher.Invoke(() => _mainWindow.ShowMessage($"✅ 已停止所有視頻播放 (耗時 {stopwatch.ElapsedMilliseconds}ms)"));
+
+                if (_isFullScreenMode)
+                {
+                    ExitFullScreenModeSmooth();
+                }
+            }
+            catch (Exception ex)
+            {
+                _mainWindow.Dispatcher.Invoke(() => _mainWindow.ShowMessage($"批次停止播放時發生錯誤: {ex.Message}"));
+                Console.WriteLine($"StopAllPlaybackAsync 異常：{ex}");
+            }
+        }
+
+        /// <summary>
+        /// 🔥 同步版本的批次停止播放（供按鈕直接調用） - 優化版
+        /// </summary>
+        public void StopAllPlayback()
+        {
+            try
+            {
+                var playingPlayers = _videoPlayers.Where(p => p.IsPlaying).ToList();
+                if (playingPlayers.Count == 0)
+                {
+                    _mainWindow.Dispatcher.Invoke(() => _mainWindow.ShowMessage("沒有正在播放的視頻"));
+                    return;
+                }
+
+                _mainWindow.Dispatcher.Invoke(() => _mainWindow.ShowMessage($"正在停止 {playingPlayers.Count} 個視頻..."));
+
+                // 先黑屏 - 使用 Parallel，但限制度
+                var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount / 2 };
+                Parallel.ForEach(playingPlayers, parallelOptions, player => player.QuickBlackScreen());
+
+                // 並行停止
+                var stopTasks = playingPlayers.Select(player => Task.Run(() =>
+                {
+                    try
+                    {
+                        player.StopPlay(); // 已包含 RefreshDisplay()
+                        player.SetPlaybackMode(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"停止播放器 {player.Index} 時發生錯誤: {ex.Message}");
+                    }
+                })).ToArray();
+
+                Task.WhenAll(stopTasks).Wait(TimeSpan.FromSeconds(3)); // 同步等待
+
+                _mainWindow.Dispatcher.Invoke(() => _mainWindow.ShowMessage($"✅ 已並行停止所有播放"));
+            }
+            catch (Exception ex)
+            {
+                _mainWindow.Dispatcher.Invoke(() => _mainWindow.ShowMessage($"批次停止播放時發生錯誤: {ex.Message}"));
+            }
+        }
+
+        // === 以下為原有的其他方法，保持不變 ===
         private void OnPlayerSelected(MultiViewPlayer selectedPlayer)
         {
             try
@@ -111,8 +326,6 @@ namespace SentryX
                 SelectPlayer(selectedPlayer);
                 _mainWindow.ShowMessage($"已選中分割區域 {selectedPlayer.Index + 1}");
                 PlayerSelected?.Invoke(selectedPlayer);
-                
-                // 新增：通知 MainWindow 更新按鈕狀態
                 _mainWindow.Dispatcher.BeginInvoke(new Action(() =>
                 {
                     _mainWindow.UpdateButtonStates();
@@ -124,21 +337,16 @@ namespace SentryX
             }
         }
 
-        /// <summary>
-        /// 處理播放器雙擊事件 - 流暢切換模式
-        /// </summary>
         private void OnPlayerDoubleClicked(MultiViewPlayer doubleClickedPlayer)
         {
             try
             {
                 if (_isFullScreenMode)
                 {
-                    // 當前在全螢幕模式，切換回多分割畫面
                     ExitFullScreenModeSmooth();
                 }
                 else
                 {
-                    // 當前在多分割畫面，切換到全螢幕模式
                     EnterFullScreenModeSmooth(doubleClickedPlayer);
                 }
             }
@@ -149,59 +357,45 @@ namespace SentryX
             }
         }
 
-        /// <summary>
-        /// 流暢進入全螢幕模式 - 不停止播放，只隱藏其他播放器
-        /// </summary>
         private void EnterFullScreenModeSmooth(MultiViewPlayer targetPlayer)
         {
             try
             {
                 Console.WriteLine($"流暢進入全螢幕模式：播放器 {targetPlayer.Index}");
-
-                // 檢查目標播放器是否正在播放
                 if (!targetPlayer.IsPlaying)
                 {
                     _mainWindow.ShowMessage("該分割區域沒有播放視頻，無法進入全螢幕模式");
                     return;
                 }
 
-                // 標記狀態
                 _isFullScreenMode = true;
                 _fullScreenPlayer = targetPlayer;
                 _previousSplitCount = _currentSplitCount;
-
-                // 隱藏其他播放器（不停止播放）
                 _hiddenPlayers.Clear();
+
                 foreach (var player in _videoPlayers)
                 {
                     if (player != targetPlayer)
                     {
-                        // 從網格中移除但不銷毀
                         _mainWindow.VideoDisplayGrid.Children.Remove(player.HostControl);
                         _hiddenPlayers.Add(player.HostControl);
                     }
                 }
 
-                // 重新配置網格為單一格子
                 _mainWindow.VideoDisplayGrid.RowDefinitions.Clear();
                 _mainWindow.VideoDisplayGrid.ColumnDefinitions.Clear();
                 _mainWindow.VideoDisplayGrid.RowDefinitions.Add(new RowDefinition());
                 _mainWindow.VideoDisplayGrid.ColumnDefinitions.Add(new ColumnDefinition());
 
-                // 將目標播放器設置為全螢幕
                 Grid.SetRow(targetPlayer.HostControl, 0);
                 Grid.SetColumn(targetPlayer.HostControl, 0);
 
-                // 立即更新佈局
                 _mainWindow.VideoDisplayGrid.UpdateLayout();
                 _mainWindow.VideoDisplayGrid.InvalidateVisual();
 
-                // 選中目標播放器
                 SelectPlayer(targetPlayer);
-
                 _mainWindow.ShowMessage($"已進入全螢幕模式：分割區域 {targetPlayer.Index + 1}");
                 FullScreenModeChanged?.Invoke(true);
-
                 Console.WriteLine("流暢全螢幕模式設定完成");
             }
             catch (Exception ex)
@@ -211,39 +405,29 @@ namespace SentryX
             }
         }
 
-        /// <summary>
-        /// 流暢退出全螢幕模式 - 恢復所有播放器顯示
-        /// </summary>
         private void ExitFullScreenModeSmooth()
         {
             try
             {
                 Console.WriteLine("流暢退出全螢幕模式，恢復多分割畫面");
-
                 if (!_isFullScreenMode || _fullScreenPlayer == null)
                 {
                     Console.WriteLine("當前不在全螢幕模式");
                     return;
                 }
 
-                // 重新建立原本的網格佈局
                 RestoreGridLayout(_previousSplitCount);
-
-                // 恢復所有播放器到網格中
                 RestoreAllPlayersToGrid();
 
-                // 重置狀態
                 _isFullScreenMode = false;
                 _fullScreenPlayer = null;
                 _hiddenPlayers.Clear();
 
-                // 立即更新佈局
                 _mainWindow.VideoDisplayGrid.UpdateLayout();
                 _mainWindow.VideoDisplayGrid.InvalidateVisual();
 
                 _mainWindow.ShowMessage($"已退出全螢幕模式，恢復 {_previousSplitCount} 分割畫面");
                 FullScreenModeChanged?.Invoke(false);
-
                 Console.WriteLine("流暢退出全螢幕模式完成");
             }
             catch (Exception ex)
@@ -253,18 +437,12 @@ namespace SentryX
             }
         }
 
-        /// <summary>
-        /// 恢復網格佈局
-        /// </summary>
         private void RestoreGridLayout(int splitCount)
         {
             _currentSplitCount = splitCount;
-
             _mainWindow.VideoDisplayGrid.RowDefinitions.Clear();
             _mainWindow.VideoDisplayGrid.ColumnDefinitions.Clear();
-
             int gridSize = (int)Math.Ceiling(Math.Sqrt(splitCount));
-
             for (int i = 0; i < gridSize; i++)
             {
                 _mainWindow.VideoDisplayGrid.RowDefinitions.Add(new RowDefinition());
@@ -272,38 +450,24 @@ namespace SentryX
             }
         }
 
-        /// <summary>
-        /// 恢復所有播放器到網格中
-        /// </summary>
         private void RestoreAllPlayersToGrid()
         {
-            // 確保網格中只有全螢幕播放器
             _mainWindow.VideoDisplayGrid.Children.Clear();
-
             int gridSize = (int)Math.Ceiling(Math.Sqrt(_previousSplitCount));
             int panelIndex = 0;
-
             for (int row = 0; row < gridSize && panelIndex < _videoPlayers.Count; row++)
             {
                 for (int col = 0; col < gridSize && panelIndex < _videoPlayers.Count; col++)
                 {
                     var player = _videoPlayers[panelIndex];
-
-                    // 設置網格位置
                     Grid.SetRow(player.HostControl, row);
                     Grid.SetColumn(player.HostControl, col);
-
-                    // 添加到網格
                     _mainWindow.VideoDisplayGrid.Children.Add(player.HostControl);
-
                     panelIndex++;
                 }
             }
         }
 
-        /// <summary>
-        /// 強制退出全螢幕模式（供外部調用）
-        /// </summary>
         public void ForceExitFullScreenMode()
         {
             if (_isFullScreenMode)
@@ -312,9 +476,6 @@ namespace SentryX
             }
         }
 
-        /// <summary>
-        /// 檢查指定播放器是否為當前全螢幕播放器
-        /// </summary>
         public bool IsFullScreenPlayer(MultiViewPlayer player)
         {
             return _isFullScreenMode && _fullScreenPlayer == player;
@@ -329,8 +490,7 @@ namespace SentryX
 
             _selectedPlayer = player;
             _selectedPlayer.IsSelected = true;
-            
-            // 新增：觸發按鈕狀態更新
+
             _mainWindow.Dispatcher.BeginInvoke(new Action(() =>
             {
                 _mainWindow.UpdateButtonStates();
@@ -341,15 +501,13 @@ namespace SentryX
         {
             try
             {
-                // 首先嘗試找到不在播放且不在回放模式的播放器
                 var nextPlayer = _videoPlayers.FirstOrDefault(p => !p.IsPlaying && !p.HasActiveContent);
-                
+
                 if (nextPlayer == null)
                 {
-                    // 如果沒有完全空閒的播放器，則找不在播放的播放器（可能在回放模式）
                     nextPlayer = _videoPlayers.FirstOrDefault(p => !p.IsPlaying);
                 }
-                
+
                 if (nextPlayer != null)
                 {
                     SelectPlayer(nextPlayer);
@@ -367,48 +525,16 @@ namespace SentryX
             }
         }
 
-        /// <summary>
-        /// 🔥 修正：停止所有視頻播放器 - 確保清除選中狀態
-        /// </summary>
-        public void StopAllVideoPlayers()
-        {
-            foreach (var player in _videoPlayers)
-            {
-                try
-                {
-                    // 🔥 先強制清除選中狀態，防止 IVS 規則殘留
-                    player.ForceClearSelectedState();
-                    
-                    player.Selected -= OnPlayerSelected;
-                    player.DoubleClicked -= OnPlayerDoubleClicked;
-                    player.Dispose();
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"清理播放器時發生錯誤: {ex.Message}");
-                }
-            }
-            _videoPlayers.Clear();
-            _selectedPlayer = null;
-
-            // 重置全螢幕相關狀態
-            _isFullScreenMode = false;
-            _fullScreenPlayer = null;
-            _hiddenPlayers.Clear();
-        }
-
-        /// <summary>
-        /// 🔥 新增：強制清除所有播放器的選中狀態 - 專門解決 IVS 問題
-        /// </summary>
         public void ForceClearAllSelectedStates()
         {
             try
             {
-                foreach (var player in _videoPlayers)
+                // 並行清除所有選中狀態
+                Parallel.ForEach(_videoPlayers, player =>
                 {
                     player.ForceClearSelectedState();
-                }
-                
+                });
+
                 _mainWindow.ShowMessage("已強制清除所有分割區域的選中狀態");
                 Debug.WriteLine("所有播放器的選中狀態已強制清除");
             }
@@ -418,25 +544,16 @@ namespace SentryX
             }
         }
 
-        /// <summary>
-        /// 獲取可用的播放器數量
-        /// </summary>
         public int GetAvailablePlayerCount()
         {
             return _videoPlayers.Count(p => !p.IsPlaying);
         }
 
-        /// <summary>
-        /// 獲取正在播放的播放器數量
-        /// </summary>
         public int GetPlayingPlayerCount()
         {
             return _videoPlayers.Count(p => p.IsPlaying);
         }
 
-        /// <summary>
-        /// 停止指定索引的播放器
-        /// </summary>
         public bool StopPlayer(int index)
         {
             if (index >= 0 && index < _videoPlayers.Count)
@@ -445,7 +562,6 @@ namespace SentryX
                 {
                     var player = _videoPlayers[index];
 
-                    // 如果正在全螢幕顯示這個播放器，先退出全螢幕
                     if (_isFullScreenMode && _fullScreenPlayer == player)
                     {
                         ExitFullScreenModeSmooth();
@@ -464,27 +580,20 @@ namespace SentryX
             return false;
         }
 
-        /// <summary>
-        /// 停止選中播放器的播放
-        /// </summary>
         public bool StopSelectedPlayer()
         {
             if (_selectedPlayer != null)
             {
                 try
                 {
-                    // 如果正在全螢幕顯示選中的播放器，先退出全螢幕
                     if (_isFullScreenMode && _fullScreenPlayer == _selectedPlayer)
                     {
                         ExitFullScreenModeSmooth();
                     }
 
-                    // 停止播放（包括實況和可能的回放狀態）
                     _selectedPlayer.StopPlay();
-                    
-                    // 確保清除回放模式狀態
                     _selectedPlayer.SetPlaybackMode(false);
-                    
+
                     _mainWindow.ShowMessage($"已停止分割區域 {_selectedPlayer.Index + 1} 的播放");
                     return true;
                 }
@@ -501,9 +610,6 @@ namespace SentryX
             }
         }
 
-        /// <summary>
-        /// 獲取播放器狀態摘要
-        /// </summary>
         public string GetPlayerStatusSummary()
         {
             var playing = GetPlayingPlayerCount();
@@ -512,25 +618,16 @@ namespace SentryX
             return $"播放中: {playing}/{total}{fullScreenStatus}";
         }
 
-        /// <summary>
-        /// 檢查是否有任何播放器正在播放
-        /// </summary>
         public bool HasAnyPlayerPlaying()
         {
             return _videoPlayers.Any(p => p.IsPlaying);
         }
 
-        /// <summary>
-        /// 檢查是否所有播放器都在播放
-        /// </summary>
         public bool AreAllPlayersPlaying()
         {
             return _videoPlayers.Count > 0 && _videoPlayers.All(p => p.IsPlaying);
         }
 
-        /// <summary>
-        /// 根據索引選擇播放器
-        /// </summary>
         public bool SelectPlayerByIndex(int index)
         {
             if (index >= 0 && index < _videoPlayers.Count)
@@ -541,9 +638,6 @@ namespace SentryX
             return false;
         }
 
-        /// <summary>
-        /// 切換到下一個播放器
-        /// </summary>
         public void SelectNextPlayer()
         {
             if (_videoPlayers.Count == 0) return;
@@ -553,9 +647,6 @@ namespace SentryX
             SelectPlayer(_videoPlayers[nextIndex]);
         }
 
-        /// <summary>
-        /// 切換到上一個播放器
-        /// </summary>
         public void SelectPreviousPlayer()
         {
             if (_videoPlayers.Count == 0) return;

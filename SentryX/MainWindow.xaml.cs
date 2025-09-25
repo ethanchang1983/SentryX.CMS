@@ -357,6 +357,11 @@ namespace SentryX
             ShowMessage("🔄 設備列表已手動刷新");
         }
 
+        public void InvokeOnUI(Action action)
+        {
+            Dispatcher.BeginInvoke(action);  // 異步 Dispatcher
+        }
+
         private void StartVideoButton_Click(object sender, RoutedEventArgs e)
         {
             if (_deviceListManager == null || _playbackManager == null) return;
@@ -498,52 +503,44 @@ namespace SentryX
         {
             try
             {
-                ShowMessage("🛑 開始停止所有分割區域的播放...");
+                ShowMessage("🛑 開始並行停止所有播放...");
 
-                // 先停止所有回放會話
-                _playbackControlManager?.StopAllPlaybacks();
-                ShowMessage("🔄 已停止所有回放會話");
-
-                // 停止所有實況播放
-                int stoppedCount = _playbackManager?.StopAllPlayback() ?? 0;
-
-                // 強制清除所有分割區域的顯示內容
-                if (_splitScreenManager != null)
+                // 使用 Task.Run 在背景執行，避免阻塞 UI
+                Task.Run(() =>
                 {
-                    foreach (var player in _splitScreenManager.VideoPlayers)
+                    try
                     {
-                        try
-                        {
-                            // 設定為非回放模式
-                            player.SetPlaybackMode(false);
+                        // 先停止所有回放會話
+                        _playbackControlManager?.StopAllPlayback();
 
-                            // 強制重新整理顯示（清除殘留畫面）
-                            player.RefreshDisplay();
-                        }
-                        catch (Exception ex)
+                        // 使用新的並行停止方法
+                        _splitScreenManager?.StopAllPlayback();
+
+                        // 在 UI 線程上強制清除顯示
+                        Dispatcher.Invoke(() =>
                         {
-                            ShowMessage($"清除分割區域 {player.Index + 1} 顯示時發生錯誤：{ex.Message}");
-                        }
+                            if (_splitScreenManager != null)
+                            {
+                                Parallel.ForEach(_splitScreenManager.VideoPlayers, player =>
+                                {
+                                    player.SetPlaybackMode(false);
+                                    player.RefreshDisplay();
+                                });
+                            }
+
+                            ShowMessage("✅ 所有播放已停止並清除顯示");
+                            UpdateButtonStates();
+                        });
                     }
-
-                    ShowMessage("🧹 已強制清除所有分割區域的顯示內容");
-                }
-
-                if (stoppedCount > 0)
-                {
-                    ShowMessage($"✅ 已停止 {stoppedCount} 個實況播放");
-                }
-
-                ShowMessage("🛑 所有播放已完全停止並清除顯示");
+                    catch (Exception ex)
+                    {
+                        Dispatcher.Invoke(() => ShowMessage($"批次停止失敗：{ex.Message}"));
+                    }
+                });
             }
             catch (Exception ex)
             {
-                ShowMessage($"停止所有播放時發生錯誤：{ex.Message}");
-            }
-            finally
-            {
-                // 統一更新按鈕狀態
-                UpdateButtonStates();
+                ShowMessage($"批次停止失敗：{ex.Message}");
             }
         }
 

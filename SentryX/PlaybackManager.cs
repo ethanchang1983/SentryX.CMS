@@ -425,7 +425,7 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 停止指定播放器的回放
+        /// 停止指定播放器的回放 - 修正版本，確保清除畫面
         /// </summary>
         public bool StopPlayback(int playerIndex, bool forceCleanup = false)
         {
@@ -438,6 +438,7 @@ namespace SentryX
 
                 try
                 {
+                    // 停止回放句柄
                     if (session.PlaybackHandle != IntPtr.Zero)
                     {
                         _mainWindow.ShowMessage($"正在停止回放句柄：{session.PlaybackHandle.ToInt64()}");
@@ -465,16 +466,34 @@ namespace SentryX
                         }
                     }
 
-                    // 獲取播放器並設定退出回放模式
+                    // 🔥 關鍵修正：清除播放器顯示內容
                     if (playerIndex >= 0 && playerIndex < _splitScreenManager.VideoPlayers.Count)
                     {
                         var player = _splitScreenManager.VideoPlayers[playerIndex];
+
+                        // 設定退出回放模式
                         player.SetPlaybackMode(false);
+
+                        // 🔥 重要：停止播放並清除畫面
+                        player.StopPlay(keepPlaybackState: false);
+
+                        // 🔥 強制刷新顯示，確保沒有殘留畫面
+                        player.RefreshDisplay();
+
+                        // 🔥 額外保險：再次確認清除
+                        _mainWindow.Dispatcher.Invoke(() =>
+                        {
+                            player.VideoPanel.Invalidate();
+                            player.VideoPanel.Update();
+                            player.VideoPanel.Refresh();
+                        }, System.Windows.Threading.DispatcherPriority.Send);
+
+                        _mainWindow.ShowMessage($"分割區域 {playerIndex + 1} 顯示已清除");
                     }
 
                     // 移除會話記錄
                     _activePlaybacks.Remove(playerIndex);
-                    _mainWindow.ShowMessage($"回放會話 {playerIndex} 已清理");
+                    _mainWindow.ShowMessage($"回放會話 {playerIndex} 已完全清理");
                     return true;
                 }
                 catch (Exception ex)
@@ -484,6 +503,22 @@ namespace SentryX
                     // 強制清理模式
                     if (forceCleanup)
                     {
+                        try
+                        {
+                            // 🔥 即使發生錯誤也要嘗試清除畫面
+                            if (playerIndex >= 0 && playerIndex < _splitScreenManager.VideoPlayers.Count)
+                            {
+                                var player = _splitScreenManager.VideoPlayers[playerIndex];
+                                player.SetPlaybackMode(false);
+                                player.StopPlay(keepPlaybackState: false);
+                                player.RefreshDisplay();
+                            }
+                        }
+                        catch
+                        {
+                            // 忽略清理時的錯誤
+                        }
+
                         _activePlaybacks.Remove(playerIndex);
                         _mainWindow.ShowMessage($"強制清理回放會話 {playerIndex}");
                     }
@@ -627,18 +662,40 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 停止所有回放
+        /// 停止所有回放 - 修正版本，確保清除所有畫面
         /// </summary>
-        public void StopAllPlaybacks()
+        public void StopAllPlayback()
         {
+            List<int> playerIndicesToStop;
+
+            // 先取得要停止的索引列表，然後釋放鎖
             lock (_playbackLock)
             {
-                var playerIndices = _activePlaybacks.Keys.ToList();
-                foreach (var playerIndex in playerIndices)
+                playerIndicesToStop = _activePlaybacks.Keys.ToList();
+            }
+
+            // 在鎖外面執行並行停止
+            if (playerIndicesToStop.Count > 0)
+            {
+                Parallel.ForEach(playerIndicesToStop, playerIndex =>
                 {
-                    StopPlayback(playerIndex, forceCleanup: true);
+                    try
+                    {
+                        StopPlayback(playerIndex, forceCleanup: true);
+                    }
+                    catch (Exception ex)
+                    {
+                        _mainWindow.ShowMessage($"停止回放 {playerIndex} 時發生錯誤：{ex.Message}");
+                    }
+                });
+
+                // 最後清除所有會話記錄
+                lock (_playbackLock)
+                {
+                    _activePlaybacks.Clear();
                 }
-                _mainWindow.ShowMessage($"已停止 {playerIndices.Count} 個回放會話");
+
+                _mainWindow.ShowMessage($"已停止並清除 {playerIndicesToStop.Count} 個回放會話");
             }
         }
 
@@ -647,7 +704,7 @@ namespace SentryX
         /// </summary>
         public void Cleanup()
         {
-            StopAllPlaybacks();
+            StopAllPlayback();
         }
 
         // Win32 API 聲明 - 直接呼叫 DLL

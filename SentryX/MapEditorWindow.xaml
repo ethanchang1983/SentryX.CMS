@@ -1,10 +1,16 @@
 ﻿<Window x:Class="SentryX.MapEditorWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:SentryX"
+        xmlns:gif="http://wpfanimatedgif.codeplex.com"
         Title="電子地圖編輯器" 
         Height="900" Width="1400"
         MinHeight="600" MinWidth="800"
         WindowStartupLocation="CenterScreen">
+
+    <Window.Resources>
+        <local:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
+    </Window.Resources>
 
     <Grid>
         <Grid.RowDefinitions>
@@ -103,6 +109,7 @@
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="250"/>
                 <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="250"/>
             </Grid.ColumnDefinitions>
 
             <!-- 左側：設備列表 -->
@@ -164,7 +171,7 @@
                 </Grid>
             </GroupBox>
 
-            <!-- 右側：地圖顯示區 -->
+            <!-- 中間：地圖顯示區 -->
             <GroupBox Grid.Column="1" Header="地圖區域" Margin="5">
                 <ScrollViewer Name="MapScrollViewer" 
                               HorizontalScrollBarVisibility="Auto"
@@ -186,7 +193,6 @@
                         <Canvas Name="MapCanvas" 
                                 Width="1000" 
                                 Height="800"
-                                Background="White"
                                 AllowDrop="True"
                                 Drop="MapCanvas_Drop"
                                 DragOver="MapCanvas_DragOver"
@@ -206,6 +212,24 @@
                         </Canvas>
                     </Grid>
                 </ScrollViewer>
+            </GroupBox>
+
+            <!-- 右側：圖層設計器 -->
+            <GroupBox Grid.Column="2" Header="圖層設計器" Margin="5">
+                <ListBox Name="LayersList" 
+                         Margin="5"
+                         SelectionMode="Single">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal">
+                                <CheckBox IsChecked="{Binding Visibility, Converter={StaticResource BoolToVisibilityConverter}, Mode=TwoWay}" 
+                                          Content="{Binding Name}" 
+                                          ToolTip="切換圖層可見性"/>
+                                <!-- 可以添加更多控制，如鎖定圖標等 -->
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
             </GroupBox>
         </Grid>
 

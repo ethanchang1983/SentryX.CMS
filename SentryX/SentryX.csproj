@@ -19,6 +19,10 @@
 	<Description>Pre-Alpha</Description>
 	<Copyright>Copyright © 2025 SentryX</Copyright>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WpfAnimatedGif" Version="2.0.2" />
+  </ItemGroup>
 	
 
 

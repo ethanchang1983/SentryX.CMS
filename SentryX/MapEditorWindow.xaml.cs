@@ -1,8 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -13,7 +15,7 @@ using System.IO;
 
 namespace SentryX
 {
-    // Device 類別
+    // Device 類別 - 增加 Width 和 Height 屬性
     public class Device
     {
         public required string Name { get; set; }
@@ -21,6 +23,244 @@ namespace SentryX
         public bool IsOnline { get; set; }
         public double X { get; set; }
         public double Y { get; set; }
+        public double Width { get; set; } = 40;  // 預設寬度
+        public double Height { get; set; } = 40; // 預設高度
+    }
+
+    // ResizeHandle 枚舉 - 定義縮放控制點位置
+    public enum ResizeHandle
+    {
+        None,
+        TopLeft,
+        TopRight,
+        BottomLeft,
+        BottomRight,
+        Top,
+        Bottom,
+        Left,
+        Right
+    }
+
+    // DeviceControl - 自訂的設備控件類別
+    public class DeviceControl : Grid
+    {
+        public Device Device { get; set; }
+        public Border DeviceBorder { get; private set; }
+        public Border SelectionBorder { get; private set; }
+        public List<Ellipse> ResizeHandles { get; private set; }
+        public bool IsSelected { get; set; }
+
+        public DeviceControl(Device device)
+        {
+            Device = device;
+            ResizeHandles = new List<Ellipse>();
+            DeviceBorder = new Border(); // 初始化
+            SelectionBorder = new Border(); // 初始化
+            CreateControl();
+        }
+
+        private void CreateControl()
+        {
+            // 建立設備圖標
+            DeviceBorder = new Border
+            {
+                Width = Device.Width,
+                Height = Device.Height,
+                Background = System.Windows.Media.Brushes.LightBlue,
+                BorderBrush = System.Windows.Media.Brushes.Black,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(5)
+            };
+
+            var label = new TextBlock
+            {
+                Text = Device.Name,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                VerticalAlignment = System.Windows.VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis
+            };
+
+            DeviceBorder.Child = label;
+            this.Children.Add(DeviceBorder);
+
+            // 建立選擇框（初始隱藏）
+            SelectionBorder = new Border
+            {
+                BorderBrush = System.Windows.Media.Brushes.DodgerBlue,
+                BorderThickness = new Thickness(1),
+                Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(20, 30, 144, 255)),
+                Visibility = Visibility.Collapsed,
+                Margin = new Thickness(-5) // 擴大選擇框
+            };
+            this.Children.Add(SelectionBorder);
+
+            // 建立8個縮放控制點（初始隱藏）
+            CreateResizeHandles();
+        }
+
+        private void CreateResizeHandles()
+        {
+            // 控制點的大小和樣式
+            const double handleSize = 8;
+            var handleBrush = System.Windows.Media.Brushes.White;
+            var handleStroke = System.Windows.Media.Brushes.DodgerBlue;
+
+            // 建立8個控制點：4個角落 + 4個邊緣中點
+            for (int i = 0; i < 8; i++)
+            {
+                var handle = new Ellipse
+                {
+                    Width = handleSize,
+                    Height = handleSize,
+                    Fill = handleBrush,
+                    Stroke = handleStroke,
+                    StrokeThickness = 1.5,
+                    Visibility = Visibility.Collapsed,
+                    Cursor = GetCursorForHandle((ResizeHandle)(i + 1))
+                };
+
+                ResizeHandles.Add(handle);
+                this.Children.Add(handle);
+            }
+        }
+
+        private System.Windows.Input.Cursor GetCursorForHandle(ResizeHandle handle)
+        {
+            return handle switch
+            {
+                ResizeHandle.TopLeft or ResizeHandle.BottomRight => System.Windows.Input.Cursors.SizeNWSE,
+                ResizeHandle.TopRight or ResizeHandle.BottomLeft => System.Windows.Input.Cursors.SizeNESW,
+                ResizeHandle.Top or ResizeHandle.Bottom => System.Windows.Input.Cursors.SizeNS,
+                ResizeHandle.Left or ResizeHandle.Right => System.Windows.Input.Cursors.SizeWE,
+                _ => System.Windows.Input.Cursors.Arrow
+            };
+        }
+
+        public void ShowSelection()
+        {
+            IsSelected = true;
+            SelectionBorder.Visibility = Visibility.Visible;
+
+            // 更新選擇框大小
+            SelectionBorder.Width = DeviceBorder.Width + 10;
+            SelectionBorder.Height = DeviceBorder.Height + 10;
+
+            // 顯示並定位所有控制點
+            PositionResizeHandles();
+            foreach (var handle in ResizeHandles)
+            {
+                handle.Visibility = Visibility.Visible;
+            }
+        }
+
+        public void HideSelection()
+        {
+            IsSelected = false;
+            SelectionBorder.Visibility = Visibility.Collapsed;
+            foreach (var handle in ResizeHandles)
+            {
+                handle.Visibility = Visibility.Collapsed;
+            }
+        }
+
+        private void PositionResizeHandles()
+        {
+            double w = DeviceBorder.Width;
+            double h = DeviceBorder.Height;
+            double hw = 4; // handle width / 2
+
+            // 定位8個控制點
+            if (ResizeHandles.Count >= 8)
+            {
+                // 角落
+                SetHandlePosition(ResizeHandles[0], -hw - 5, -hw - 5); // TopLeft
+                SetHandlePosition(ResizeHandles[1], w - hw + 5, -hw - 5); // TopRight
+                SetHandlePosition(ResizeHandles[2], -hw - 5, h - hw + 5); // BottomLeft
+                SetHandlePosition(ResizeHandles[3], w - hw + 5, h - hw + 5); // BottomRight
+
+                // 邊緣中點
+                SetHandlePosition(ResizeHandles[4], w / 2 - hw, -hw - 5); // Top
+                SetHandlePosition(ResizeHandles[5], w / 2 - hw, h - hw + 5); // Bottom
+                SetHandlePosition(ResizeHandles[6], -hw - 5, h / 2 - hw); // Left
+                SetHandlePosition(ResizeHandles[7], w - hw + 5, h / 2 - hw); // Right
+            }
+        }
+
+        private void SetHandlePosition(Ellipse handle, double left, double top)
+        {
+            handle.Margin = new Thickness(left, top, 0, 0);
+            handle.HorizontalAlignment = System.Windows.HorizontalAlignment.Left;
+            handle.VerticalAlignment = System.Windows.VerticalAlignment.Top;
+        }
+
+        public void UpdateSize(double width, double height)
+        {
+            // 限制最小尺寸
+            width = Math.Max(20, width);
+            height = Math.Max(20, height);
+
+            Device.Width = width;
+            Device.Height = height;
+            DeviceBorder.Width = width;
+            DeviceBorder.Height = height;
+
+            if (IsSelected)
+            {
+                SelectionBorder.Width = width + 10;
+                SelectionBorder.Height = height + 10;
+                PositionResizeHandles();
+            }
+        }
+
+        public ResizeHandle GetHandleAt(System.Windows.Point point)
+        {
+            for (int i = 0; i < ResizeHandles.Count; i++)
+            {
+                var handle = ResizeHandles[i];
+                if (handle.Visibility == Visibility.Visible)
+                {
+                    var handleBounds = new Rect(
+                        handle.Margin.Left - 2,
+                        handle.Margin.Top - 2,
+                        handle.Width + 4,
+                        handle.Height + 4
+                    );
+
+                    if (handleBounds.Contains(point))
+                    {
+                        return (ResizeHandle)(i + 1);
+                    }
+                }
+            }
+            return ResizeHandle.None;
+        }
+    }
+
+    // LayerItem 類別
+    public class LayerItem : INotifyPropertyChanged
+    {
+        public event PropertyChangedEventHandler? PropertyChanged;
+
+        public string Name { get; set; } = string.Empty;
+        public UIElement? Element { get; set; }
+
+        private Visibility _visibility = Visibility.Visible;
+        public Visibility Visibility
+        {
+            get => _visibility;
+            set
+            {
+                if (_visibility != value)
+                {
+                    _visibility = value;
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Visibility)));
+                    if (Element != null)
+                    {
+                        Element.Visibility = value;
+                    }
+                }
+            }
+        }
     }
 
     // MapConfiguration 類別
@@ -36,23 +276,23 @@ namespace SentryX
     public partial class MapEditorWindow : Window
     {
         private List<Device> devices = new List<Device>();
+        private List<LayerItem> layers = new List<LayerItem>();
         private bool isEditMode = false;
         private bool isDragging = false;
-        private bool isPanning = false;
-        private bool isDraggingMap = false; // 新增：是否在拖動底圖
-        // 修正 CS0104: 明確指定 Point 為 System.Windows.Point
-        private System.Windows.Point panStartPoint;
-        private double panStartHorizontalOffset;
-        private double panStartVerticalOffset;
-        // 將 Point 的宣告明確指定為 System.Windows.Point
+        private bool isResizing = false;
+        private bool isDraggingMap = false;
         private System.Windows.Point dragStartPoint;
-        private UIElement? draggedElement; // 允許為 null
+        private System.Windows.Point resizeStartPoint;
+        private DeviceControl? draggedControl;
+        private DeviceControl? selectedControl;
+        private ResizeHandle activeResizeHandle = ResizeHandle.None;
+        private double initialWidth;
+        private double initialHeight;
         private double currentZoom = 1.0;
         private const double ZOOM_STEP = 0.1;
-        private const double MAX_ZOOM = 2.0;
-        private const double MIN_ZOOM = 0.5;
+        private const double MAX_ZOOM = 4.9;
+        private const double MIN_ZOOM = 0.2;
 
-        // 在類別中新增私有變數，用於儲存資料夾路徑
         private string mapDataFolder = System.IO.Path.Combine(Directory.GetCurrentDirectory(), "MapData");
         private string configFilePath => System.IO.Path.Combine(mapDataFolder, "config.xml");
 
@@ -61,17 +301,19 @@ namespace SentryX
             InitializeComponent();
             InitializeDeviceList();
             UpdateButtonStates();
-            EnsureMapImageExists(); // 新增這行
-            // 確保 MapData 資料夾存在
+            EnsureMapImageExists();
+
             if (!Directory.Exists(mapDataFolder))
             {
                 Directory.CreateDirectory(mapDataFolder);
             }
+
+            LayersList.ItemsSource = layers;
+            UpdateLayersList();
         }
 
         private void InitializeDeviceList()
         {
-            // Sample device data for testing
             devices.AddRange(new[]
             {
                 new Device { Name = "Camera 1", IP = "192.168.1.101", IsOnline = true },
@@ -81,12 +323,11 @@ namespace SentryX
             AvailableDevicesList.ItemsSource = devices;
         }
 
-        // 更新載入地圖方法：載入後自動複製圖片到 MapData 資料夾
         private void LoadMapButton_Click(object sender, RoutedEventArgs e)
         {
             var openFileDialog = new Microsoft.Win32.OpenFileDialog
             {
-                Filter = "Image files (*.png;*.jpg;*.jpeg)|*.png;*.jpg;*.jpeg|All files (*.*)|*.*"
+                Filter = "Image files (*.png;*.jpg;*.jpeg;*.bmp;*.gif)|*.png;*.jpg;*.jpeg;*.bmp;*.gif|All files (*.*)|*.*"
             };
 
             if (openFileDialog.ShowDialog() == true)
@@ -97,13 +338,12 @@ namespace SentryX
                     string fileName = System.IO.Path.GetFileName(originalFilePath);
                     string newFilePath = System.IO.Path.Combine(mapDataFolder, fileName);
 
-                    // 複製圖片到 MapData 資料夾（覆蓋如果存在）
                     File.Copy(originalFilePath, newFilePath, true);
 
-                    // 更新 MapImage.Source 為新路徑
                     MapImage.Source = new BitmapImage(new Uri(newFilePath));
                     MapInfoText.Text = $"地圖: {fileName}";
                     UpdateButtonStates();
+                    UpdateLayersList();
                     StatusText.Text = "地圖已載入並複製到 MapData 資料夾";
                 }
                 catch (Exception ex)
@@ -115,30 +355,25 @@ namespace SentryX
 
         private void ClearMapButton_Click(object sender, RoutedEventArgs e)
         {
-            // 先移除現有的設備圖標（Border），但保留 MapImage
-            var existingDevices = MapCanvas.Children.OfType<Border>().ToList();
+            var existingDevices = MapCanvas.Children.OfType<DeviceControl>().ToList();
             foreach (var dev in existingDevices)
             {
                 MapCanvas.Children.Remove(dev);
             }
 
-            // 清空底圖 Source，但不移除 MapImage 控件
             MapImage.Source = null;
-
-            // 重置設備位置
-            devices.ForEach(d => { d.X = 0; d.Y = 0; });
+            devices.ForEach(d => { d.X = 0; d.Y = 0; d.Width = 40; d.Height = 40; });
 
             MapInfoText.Text = "未載入地圖";
             DeviceCountText.Text = "設備數量: 0";
             UpdateButtonStates();
+            UpdateLayersList();
         }
 
-        // 修正 CS0104: 明確指定 Image 為 System.Windows.Controls.Image
         private void EnsureMapImageExists()
         {
             if (!MapCanvas.Children.Contains(MapImage))
             {
-                // 重新創建 MapImage（匹配 XAML 定義）
                 MapImage = new System.Windows.Controls.Image
                 {
                     Name = "MapImage",
@@ -146,47 +381,42 @@ namespace SentryX
                 };
                 Canvas.SetLeft(MapImage, 0);
                 Canvas.SetTop(MapImage, 0);
-                MapCanvas.Children.Insert(0, MapImage); // 插入到最底層，作為背景
+                MapCanvas.Children.Insert(0, MapImage);
             }
         }
 
-        // AddDeviceToCanvas
         private void AddDeviceToCanvas(Device device, double x, double y)
         {
             device.X = x;
             device.Y = y;
 
-            var deviceIcon = new Border
+            var deviceControl = new DeviceControl(device)
             {
-                Width = 40,
-                Height = 40,
-                Background = System.Windows.Media.Brushes.LightBlue,
-                BorderBrush = System.Windows.Media.Brushes.Black,
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(5),
                 Tag = device
             };
 
-            var label = new TextBlock
-            {
-                Text = device.Name,
-                HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
-                VerticalAlignment = System.Windows.VerticalAlignment.Center
-            };
+            Canvas.SetLeft(deviceControl, x);
+            Canvas.SetTop(deviceControl, y);
+            MapCanvas.Children.Add(deviceControl);
 
-            deviceIcon.Child = label;
-            Canvas.SetLeft(deviceIcon, x);
-            Canvas.SetTop(deviceIcon, y);
-            MapCanvas.Children.Add(deviceIcon);
-            DeviceCountText.Text = $"設備數量: {MapCanvas.Children.OfType<Border>().Count()}";
+            DeviceCountText.Text = $"設備數量: {MapCanvas.Children.OfType<DeviceControl>().Count()}";
+            UpdateLayersList();
         }
 
         private void AddDeviceButton_Click(object sender, RoutedEventArgs e)
         {
             if (AvailableDevicesList.SelectedItem is Device selectedDevice)
             {
-                AddDeviceToCanvas(selectedDevice, 50, 50); // 新增設備到畫布，預設位置 50,50
-                UpdateButtonStates(); // 更新按鈕狀態
+                var newDevice = new Device
+                {
+                    Name = selectedDevice.Name,
+                    IP = selectedDevice.IP,
+                    IsOnline = selectedDevice.IsOnline,
+                    Width = 40,
+                    Height = 40
+                };
+                AddDeviceToCanvas(newDevice, 50, 50);
+                UpdateButtonStates();
             }
             else
             {
@@ -198,19 +428,26 @@ namespace SentryX
         {
             isEditMode = !isEditMode;
             EditModeText.Text = isEditMode ? "編輯模式" : "檢視模式";
+
+            if (!isEditMode && selectedControl != null)
+            {
+                selectedControl.HideSelection();
+                selectedControl = null;
+            }
+
             UpdateButtonStates();
         }
 
         private void DeleteSelectedButton_Click(object sender, RoutedEventArgs e)
         {
-            // 將 Brushes 明確指定為 System.Windows.Media.Brushes
-            var selectedElements = MapCanvas.Children.OfType<Border>().Where(b => b.BorderBrush == System.Windows.Media.Brushes.Red).ToList();
-            foreach (var element in selectedElements)
+            if (selectedControl != null)
             {
-                MapCanvas.Children.Remove(element);
+                MapCanvas.Children.Remove(selectedControl);
+                selectedControl = null;
+                DeviceCountText.Text = $"設備數量: {MapCanvas.Children.OfType<DeviceControl>().Count()}";
+                UpdateButtonStates();
+                UpdateLayersList();
             }
-            DeviceCountText.Text = $"設備數量: {MapCanvas.Children.OfType<Border>().Count()}";
-            UpdateButtonStates();
         }
 
         private void ZoomInButton_Click(object sender, RoutedEventArgs e)
@@ -258,28 +495,230 @@ namespace SentryX
             e.Handled = true;
         }
 
-        // 更新儲存配置方法：直接儲存到固定路徑 MapData/config.xml
+        private void MapCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            var point = e.GetPosition(MapCanvas);
+            var hitElement = MapCanvas.InputHitTest(point) as FrameworkElement;
+
+            DeviceControl? clickedControl = null;
+            FrameworkElement? current = hitElement;
+
+            while (current != null && current != MapCanvas)
+            {
+                if (current is DeviceControl dc)
+                {
+                    clickedControl = dc;
+                    break;
+                }
+                current = current.Parent as FrameworkElement;
+            }
+
+            if (clickedControl != null && isEditMode)
+            {
+                var localPoint = e.GetPosition(clickedControl);
+                var handle = clickedControl.GetHandleAt(localPoint);
+
+                if (handle != ResizeHandle.None)
+                {
+                    isResizing = true;
+                    activeResizeHandle = handle;
+                    resizeStartPoint = point;
+                    initialWidth = clickedControl.Device.Width;
+                    initialHeight = clickedControl.Device.Height;
+                    MapCanvas.CaptureMouse();
+                    e.Handled = true;
+                    return;
+                }
+
+                if (selectedControl != null && selectedControl != clickedControl)
+                {
+                    selectedControl.HideSelection();
+                }
+
+                selectedControl = clickedControl;
+                selectedControl.ShowSelection();
+
+                isDragging = true;
+                draggedControl = clickedControl;
+                dragStartPoint = point;
+                MapCanvas.CaptureMouse();
+                e.Handled = true;
+            }
+            else
+            {
+                if (selectedControl != null && isEditMode)
+                {
+                    selectedControl.HideSelection();
+                    selectedControl = null;
+                }
+
+                if (MapImage.Source != null && !isEditMode)
+                {
+                    isDraggingMap = true;
+                    dragStartPoint = e.GetPosition(MapCanvas);
+                    MapCanvas.CaptureMouse();
+                    MapCanvas.Cursor = System.Windows.Input.Cursors.Hand;
+                    e.Handled = true;
+                }
+            }
+
+            UpdateButtonStates();
+        }
+
+        private void MapCanvas_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+        {
+            var currentPoint = e.GetPosition(MapCanvas);
+
+            if (isResizing && selectedControl != null)
+            {
+                var deltaX = currentPoint.X - resizeStartPoint.X;
+                var deltaY = currentPoint.Y - resizeStartPoint.Y;
+
+                double newWidth = initialWidth;
+                double newHeight = initialHeight;
+
+                switch (activeResizeHandle)
+                {
+                    case ResizeHandle.TopLeft:
+                        newWidth = initialWidth - deltaX;
+                        newHeight = initialHeight - deltaY;
+                        break;
+                    case ResizeHandle.TopRight:
+                        newWidth = initialWidth + deltaX;
+                        newHeight = initialHeight - deltaY;
+                        break;
+                    case ResizeHandle.BottomLeft:
+                        newWidth = initialWidth - deltaX;
+                        newHeight = initialHeight + deltaY;
+                        break;
+                    case ResizeHandle.BottomRight:
+                        newWidth = initialWidth + deltaX;
+                        newHeight = initialHeight + deltaY;
+                        break;
+                    case ResizeHandle.Top:
+                        newHeight = initialHeight - deltaY;
+                        break;
+                    case ResizeHandle.Bottom:
+                        newHeight = initialHeight + deltaY;
+                        break;
+                    case ResizeHandle.Left:
+                        newWidth = initialWidth - deltaX;
+                        break;
+                    case ResizeHandle.Right:
+                        newWidth = initialWidth + deltaX;
+                        break;
+                }
+
+                selectedControl.UpdateSize(newWidth, newHeight);
+                MousePositionText.Text = $"大小: {newWidth:0} x {newHeight:0}";
+            }
+            else if (isDragging && draggedControl != null)
+            {
+                var offset = currentPoint - dragStartPoint;
+                dragStartPoint = currentPoint;
+
+                double newX = Canvas.GetLeft(draggedControl) + offset.X;
+                double newY = Canvas.GetTop(draggedControl) + offset.Y;
+
+                Canvas.SetLeft(draggedControl, newX);
+                Canvas.SetTop(draggedControl, newY);
+
+                if (draggedControl.Device != null)
+                {
+                    draggedControl.Device.X = newX;
+                    draggedControl.Device.Y = newY;
+                }
+
+                MousePositionText.Text = $"座標: {newX:0}, {newY:0}";
+            }
+            else if (isDraggingMap)
+            {
+                var offset = currentPoint - dragStartPoint;
+                dragStartPoint = currentPoint;
+
+                double newMapLeft = Canvas.GetLeft(MapImage) + offset.X;
+                double newMapTop = Canvas.GetTop(MapImage) + offset.Y;
+                Canvas.SetLeft(MapImage, newMapLeft);
+                Canvas.SetTop(MapImage, newMapTop);
+
+                foreach (var control in MapCanvas.Children.OfType<DeviceControl>())
+                {
+                    double devLeft = Canvas.GetLeft(control) + offset.X;
+                    double devTop = Canvas.GetTop(control) + offset.Y;
+                    Canvas.SetLeft(control, devLeft);
+                    Canvas.SetTop(control, devTop);
+
+                    if (control.Device != null)
+                    {
+                        control.Device.X = devLeft;
+                        control.Device.Y = devTop;
+                    }
+                }
+
+                MousePositionText.Text = $"底圖座標: {newMapLeft:0}, {newMapTop:0}";
+            }
+            else
+            {
+                MousePositionText.Text = $"座標: {currentPoint.X:0}, {currentPoint.Y:0}";
+            }
+        }
+
+        private void MapCanvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            if (isResizing)
+            {
+                isResizing = false;
+                activeResizeHandle = ResizeHandle.None;
+            }
+
+            if (isDragging)
+            {
+                isDragging = false;
+                draggedControl = null;
+            }
+
+            if (isDraggingMap)
+            {
+                isDraggingMap = false;
+                MapCanvas.Cursor = System.Windows.Input.Cursors.Arrow;
+            }
+
+            MapCanvas.ReleaseMouseCapture();
+        }
+
+        private void MapCanvas_MouseRightButtonDown(object sender, System.Windows.Input.MouseEventArgs e)
+        {
+            e.Handled = true;
+        }
+
         private void SaveMapButton_Click(object sender, RoutedEventArgs e)
         {
             try
             {
-                // 確保資料夾存在
                 if (!Directory.Exists(mapDataFolder))
                 {
                     Directory.CreateDirectory(mapDataFolder);
                 }
 
-                // 建立配置物件，使用複製後的圖片路徑
                 string currentMapPath = MapImage.Source is BitmapImage bitmap && bitmap.UriSource != null
                     ? bitmap.UriSource.LocalPath
                     : string.Empty;
+
+                var placedDevices = new List<Device>();
+                foreach (var control in MapCanvas.Children.OfType<DeviceControl>())
+                {
+                    if (control.Device != null)
+                    {
+                        placedDevices.Add(control.Device);
+                    }
+                }
+
                 var config = new MapConfiguration
                 {
                     MapImagePath = currentMapPath,
-                    Devices = devices.Where(d => d.X != 0 || d.Y != 0).ToList() // 僅包含已放置的設備
+                    Devices = placedDevices
                 };
 
-                // 序列化為 XML 並寫入固定檔案
                 XmlSerializer serializer = new XmlSerializer(typeof(MapConfiguration));
                 using (StreamWriter writer = new StreamWriter(configFilePath))
                 {
@@ -307,21 +746,15 @@ namespace SentryX
                 XmlSerializer serializer = new XmlSerializer(typeof(MapConfiguration));
                 using (StreamReader reader = new StreamReader(configFilePath))
                 {
-                    // 原本的程式碼
-                    // var config = (MapConfiguration)serializer.Deserialize(reader);
-
-                    // 修正後，使用 as 並加上 null 檢查
                     var config = serializer.Deserialize(reader) as MapConfiguration
-                        ?? throw new InvalidOperationException("反序列化 MapConfiguration 失敗，結果為 null。");
+                        ?? throw new InvalidOperationException("反序列化 MapConfiguration 失敗。");
 
-                    // 先移除現有的設備圖標（Border），但保留 MapImage
-                    var existingDevices = MapCanvas.Children.OfType<Border>().ToList();
+                    var existingDevices = MapCanvas.Children.OfType<DeviceControl>().ToList();
                     foreach (var dev in existingDevices)
                     {
                         MapCanvas.Children.Remove(dev);
                     }
 
-                    // 載入底圖
                     if (!string.IsNullOrEmpty(config.MapImagePath) && File.Exists(config.MapImagePath))
                     {
                         MapImage.Source = new BitmapImage(new Uri(config.MapImagePath));
@@ -329,21 +762,30 @@ namespace SentryX
                     }
                     else
                     {
-                        MapImage.Source = null; // 清空舊圖片
+                        MapImage.Source = null;
                         MapInfoText.Text = "未載入地圖";
                         System.Windows.MessageBox.Show("載入的圖片路徑無效或檔案不存在。", "警告", MessageBoxButton.OK, MessageBoxImage.Warning);
                     }
 
-                    // 載入設備
                     devices = config.Devices ?? new List<Device>();
                     foreach (var device in devices)
                     {
                         if (device.X != 0 || device.Y != 0)
-                            AddDeviceToCanvas(device, device.X, device.Y);
+                        {
+                            var deviceControl = new DeviceControl(device)
+                            {
+                                Tag = device
+                            };
+                            Canvas.SetLeft(deviceControl, device.X);
+                            Canvas.SetTop(deviceControl, device.Y);
+                            MapCanvas.Children.Add(deviceControl);
+                        }
                     }
+
                     AvailableDevicesList.ItemsSource = devices;
-                    DeviceCountText.Text = $"設備數量: {MapCanvas.Children.OfType<Border>().Count()}"; // 減 1，因為 MapImage 佔一個
+                    DeviceCountText.Text = $"設備數量: {MapCanvas.Children.OfType<DeviceControl>().Count()}";
                     UpdateButtonStates();
+                    UpdateLayersList();
                     StatusText.Text = "配置已從 MapData/config.xml 載入";
                 }
             }
@@ -386,145 +828,29 @@ namespace SentryX
         {
             if (isEditMode && AvailableDevicesList.SelectedItem is Device selectedDevice)
             {
-                AddDeviceToCanvas(selectedDevice, 50, 50);
+                var newDevice = new Device
+                {
+                    Name = selectedDevice.Name,
+                    IP = selectedDevice.IP,
+                    IsOnline = selectedDevice.IsOnline,
+                    Width = 40,
+                    Height = 40
+                };
+                AddDeviceToCanvas(newDevice, 50, 50);
                 UpdateButtonStates();
-            }
-        }
-
-        private void MapCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-        {
-            if (isEditMode)
-            {
-                // 原有邏輯：編輯模式下拖動設備
-                var point = e.GetPosition(MapCanvas);
-                var hitElement = MapCanvas.InputHitTest(point) as UIElement;
-
-                if (hitElement is Border border && border.Tag is Device)
-                {
-                    isDragging = true;
-                    draggedElement = border;
-                    dragStartPoint = point;
-                    border.BorderBrush = System.Windows.Media.Brushes.Red;
-                    e.Handled = true;
-                    return; // 如果擊中設備，結束不進入拖動底圖
-                }
-            }
-
-            // 非編輯模式或未擊中設備：開始拖動底圖（如果有地圖）
-            if (MapImage.Source != null)
-            {
-                isDraggingMap = true;
-                dragStartPoint = e.GetPosition(MapCanvas); // 記錄起始位置
-                MapCanvas.CaptureMouse(); // 捕捉滑鼠
-
-                // 新增：變更游標為小手
-                MapCanvas.Cursor = System.Windows.Input.Cursors.Hand;
-
-                e.Handled = true;
-            }
-        }
-
-        private void MapCanvas_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
-        {
-            if (isDragging && draggedElement != null)
-            {
-                // 原有邏輯：拖動設備
-                var currentPoint = e.GetPosition(MapCanvas);
-                var offset = currentPoint - dragStartPoint;
-                dragStartPoint = currentPoint;
-
-                double newX = Canvas.GetLeft(draggedElement) + offset.X;
-                double newY = Canvas.GetTop(draggedElement) + offset.Y;
-
-                Canvas.SetLeft(draggedElement, newX);
-                Canvas.SetTop(draggedElement, newY);
-
-                if (draggedElement is Border border && border.Tag is Device device)
-                {
-                    device.X = newX;
-                    device.Y = newY;
-                }
-
-                MousePositionText.Text = $"座標: {newX:0}, {newY:0}";
-            }
-            else if (isDraggingMap)
-            {
-                // 新邏輯：拖動底圖，並同步設備位置
-                var currentPoint = e.GetPosition(MapCanvas);
-                var offset = currentPoint - dragStartPoint;
-                dragStartPoint = currentPoint;
-
-                // 移動底圖
-                double newMapLeft = Canvas.GetLeft(MapImage) + offset.X;
-                double newMapTop = Canvas.GetTop(MapImage) + offset.Y;
-                Canvas.SetLeft(MapImage, newMapLeft);
-                Canvas.SetTop(MapImage, newMapTop);
-
-                // 同步移動所有設備，保持相對位置
-                foreach (var child in MapCanvas.Children.OfType<Border>())
-                {
-                    if (child.Tag is Device)
-                    {
-                        double devLeft = Canvas.GetLeft(child) + offset.X;
-                        double devTop = Canvas.GetTop(child) + offset.Y;
-                        Canvas.SetLeft(child, devLeft);
-                        Canvas.SetTop(child, devTop);
-
-                        // 更新 Device 的 X/Y
-                        if (child.Tag is Device dev)
-                        {
-                            dev.X = devLeft;
-                            dev.Y = devTop;
-                        }
-                    }
-                }
-
-                MousePositionText.Text = $"底圖座標: {newMapLeft:0}, {newMapTop:0}";
-            }
-        }
-
-        private void MapCanvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
-        {
-            if (isDragging && draggedElement is Border border)
-            {
-                // 原有邏輯：結束設備拖動
-                border.BorderBrush = System.Windows.Media.Brushes.Black;
-                isDragging = false;
-                draggedElement = null;
-            }
-
-            if (isDraggingMap)
-            {
-                // 結束拖動底圖
-                isDraggingMap = false;
-                MapCanvas.ReleaseMouseCapture();
-
-                // 恢復游標為箭頭
-                MapCanvas.Cursor = System.Windows.Input.Cursors.Arrow;
-            }
-        }
-
-        private void MapCanvas_MouseRightButtonDown(object sender, System.Windows.Input.MouseEventArgs e)
-        {
-            if (!isEditMode) return;
-
-            var point = e.GetPosition(MapCanvas);
-            var hitElement = MapCanvas.InputHitTest(point) as UIElement;
-
-            if (hitElement is Border border)
-            {
-                border.BorderBrush = border.BorderBrush == System.Windows.Media.Brushes.Red
-                    ? System.Windows.Media.Brushes.Black
-                    : System.Windows.Media.Brushes.Red;
             }
         }
 
         private void MapCanvas_Drop(object sender, System.Windows.DragEventArgs e)
         {
-            if (e.Data.GetDataPresent(typeof(Device)) && e.Data.GetData(typeof(Device)) is Device device)
+            if (e.Data.GetDataPresent(typeof(Device)))
             {
-                var point = e.GetPosition(MapCanvas);
-                AddDeviceToCanvas(device, point.X, point.Y);
+                var device = e.Data.GetData(typeof(Device)) as Device;
+                if (device != null)
+                {
+                    var point = e.GetPosition(MapCanvas);
+                    AddDeviceToCanvas(device, point.X, point.Y);
+                }
             }
         }
 
@@ -540,11 +866,69 @@ namespace SentryX
         private void UpdateButtonStates()
         {
             bool hasMap = MapImage.Source != null;
+            bool hasSelection = selectedControl != null;
+
             ClearMapButton.IsEnabled = hasMap;
             AddDeviceButton.IsEnabled = hasMap && isEditMode;
             EditModeButton.IsEnabled = hasMap;
-            DeleteSelectedButton.IsEnabled = hasMap && isEditMode && MapCanvas.Children.Count > 0;
+            DeleteSelectedButton.IsEnabled = hasMap && isEditMode && hasSelection;
             SaveMapButton.IsEnabled = hasMap;
+        }
+
+        private void UpdateLayersList()
+        {
+            layers.Clear();
+
+            if (MapImage.Source != null)
+            {
+                layers.Add(new LayerItem
+                {
+                    Name = "底圖層",
+                    Element = MapImage,
+                    Visibility = MapImage.Visibility
+                });
+            }
+
+            int deviceIndex = 1;
+            foreach (var control in MapCanvas.Children.OfType<DeviceControl>())
+            {
+                if (control.Device != null)
+                {
+                    layers.Add(new LayerItem
+                    {
+                        Name = $"設備層 {deviceIndex}: {control.Device.Name}",
+                        Element = control,
+                        Visibility = control.Visibility
+                    });
+                    deviceIndex++;
+                }
+            }
+
+            LayersList.ItemsSource = null;
+            LayersList.ItemsSource = layers;
+        }
+    }
+
+    // Converter for CheckBox to Visibility
+    [ValueConversion(typeof(Visibility), typeof(bool))]
+    public class BoolToVisibilityConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture)
+        {
+            if (value is Visibility visibility)
+            {
+                return visibility == Visibility.Visible;
+            }
+            return false;
+        }
+
+        public object ConvertBack(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture)
+        {
+            if (value is bool isChecked)
+            {
+                return isChecked ? Visibility.Visible : Visibility.Collapsed;
+            }
+            return Visibility.Collapsed;
         }
     }
 }

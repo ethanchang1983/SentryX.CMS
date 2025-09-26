@@ -340,6 +340,15 @@ namespace SentryX
             }
         }
 
+        public void ResetForReuse()
+        {
+            StopPlay(keepPlaybackState: false);
+            IsSelected = false;
+            RefreshDisplay();
+            // 如果有 IVS 或其他狀態，重置它們
+            SetIVSRender(false);
+        }
+
         /// <summary>
         /// 新增：設定回放模式狀態
         /// </summary>
@@ -662,6 +671,8 @@ namespace SentryX
                 Debug.WriteLine($"MultiViewPlayer {Index}: 確保顯示狀態時發生異常 - {ex.Message}");
             }
         }
+
+
 
         /// <summary>
         /// 完全重置顯示狀態 - 徹底修正版本，強制清除選中狀態

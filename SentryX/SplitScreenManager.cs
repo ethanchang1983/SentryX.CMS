@@ -22,6 +22,7 @@ namespace SentryX
         private int _previousSplitCount = 1;
         private List<FrameworkElement> _hiddenPlayers = new();
 
+
         public List<MultiViewPlayer> VideoPlayers => _videoPlayers;
         public MultiViewPlayer? SelectedPlayer => _selectedPlayer;
         public int CurrentSplitCount => _currentSplitCount;

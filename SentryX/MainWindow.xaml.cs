@@ -1735,7 +1735,7 @@ namespace SentryX
             {
                 _performanceManager?.StopMonitoring();
                 _playbackControlManager?.Cleanup(); // 新增：清理回放資源
-                _splitScreenManager?.StopAllVideoPlayers();
+                //_splitScreenManager?.StopAllVideoPlayers();
 
                 // 🔥 新增：清理語音對講資源
                 _voiceIntercomManager?.Dispose();

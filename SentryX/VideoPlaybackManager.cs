@@ -1,5 +1,7 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 
 namespace SentryX
 {
@@ -60,7 +62,6 @@ namespace SentryX
 
                 _mainWindow.ShowMessage($"準備使用{decodeModeText}在分割區域 {targetPlayer.Index + 1} 播放 {device.Name} 通道{channel + 1} 的{streamTypeText}視頻...");
 
-                // 修改這裡：傳遞設備ID
                 if (targetPlayer.StartPlay(device.LoginHandle, channel, _currentDecodeMode, _currentStreamType, device.Name, device.Id))
                 {
                     _mainWindow.ShowMessage($"開始播放 {device.Name} 通道{channel + 1} 的即時視頻 ({decodeModeText}, {streamTypeText}) - 分割區域 {targetPlayer.Index + 1}");
@@ -81,7 +82,7 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 新增：DVR/NVR 多通道自動播放功能
+        /// 優化的 DVR/NVR 多通道播放功能 - 極速順序版本
         /// </summary>
         /// <param name="deviceId">設備 ID</param>
         /// <returns>成功播放的通道數量</returns>
@@ -118,42 +119,72 @@ namespace SentryX
             }
 
             int channelsToPlay = Math.Min(device.ChannelCount, availablePlayers.Count);
-            int successCount = 0;
             string decodeModeText = GetDecodeModeText();
             string streamTypeText = _currentStreamType == VideoStreamType.Main ? "主碼流" : "輔碼流";
 
-            _mainWindow.ShowMessage($"開始自動播放 {device.Name} 的 {channelsToPlay} 個通道...");
+            _mainWindow.ShowMessage($"⚡ 極速啟動 {device.Name} 的 {channelsToPlay} 個通道...");
 
             try
             {
-                for (int channel = 0; channel < channelsToPlay; channel++)
+                int successCount = 0;
+                var playbackResults = new List<(int channel, int playerIndex, bool success)>();
+
+                // 🔥 極速順序版本：在 UI 執行緒上以最快速度執行
+                _mainWindow.Dispatcher.Invoke(() =>
                 {
-                    var targetPlayer = availablePlayers[channel];
-                    
-                    _mainWindow.ShowMessage($"正在播放 {device.Name} 通道{channel + 1} 到分割區域 {targetPlayer.Index + 1}...");
-                    
-                    // 同樣修改 StartMultiChannelPlayback 方法中的 StartPlay 調用
-                    // 將：
-                    // if (targetPlayer.StartPlay(device.LoginHandle, channel, _currentDecodeMode, _currentStreamType, device.Name))
-                    // 改為：
-                    if (targetPlayer.StartPlay(device.LoginHandle, channel, _currentDecodeMode, _currentStreamType, device.Name, device.Id))
+                    // 第一輪：極速啟動所有通道（不等待，不延遲）
+                    for (int i = 0; i < channelsToPlay; i++)
                     {
-                        successCount++;
-                        _mainWindow.ShowMessage($"✅ 通道{channel + 1} 播放成功 - 分割區域 {targetPlayer.Index + 1}");
-                    }
-                    else
-                    {
-                        _mainWindow.ShowMessage($"❌ 通道{channel + 1} 播放失敗");
-                    }
+                        var targetPlayer = availablePlayers[i];
 
-                    // 短暫延遲避免同時啟動太多播放
-                    System.Threading.Thread.Sleep(100);
-                }
+                        // 直接在 UI 執行緒上快速執行
+                        bool success = false;
 
+                        try
+                        {
+                            success = targetPlayer.StartPlay(
+                                device.LoginHandle,
+                                i,
+                                _currentDecodeMode,
+                                _currentStreamType,
+                                device.Name,
+                                device.Id
+                            );
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"通道 {i + 1} 播放異常：{ex.Message}");
+                        }
+
+                        playbackResults.Add((i, targetPlayer.Index, success));
+                        if (success) successCount++;
+
+                        // 🚀 關鍵：完全不延遲，或使用 1ms 微延遲
+                        // 如果完全不延遲導致問題，可以取消下面這行的註釋
+                        // System.Threading.Thread.Sleep(1);
+                    }
+                });
+
+                // 統一顯示播放結果（在所有播放啟動後才顯示，減少視覺干擾）
                 if (successCount > 0)
                 {
-                    _mainWindow.ShowMessage($"🎉 DVR 多通道播放完成：成功播放 {successCount}/{channelsToPlay} 個通道 ({decodeModeText}, {streamTypeText})");
-                    
+                    // 顯示成功的通道詳情
+                    var successChannels = playbackResults
+                        .Where(r => r.success)
+                        .OrderBy(r => r.channel)
+                        .Select(r => $"CH{r.channel + 1}→區域{r.playerIndex + 1}")
+                        .ToList();
+
+                    _mainWindow.ShowMessage($"✅ 極速播放完成：成功 {successCount}/{channelsToPlay} 個通道");
+
+                    if (successChannels.Count <= 8)
+                    {
+                        // 如果通道數較少，顯示詳細對應關係
+                        _mainWindow.ShowMessage($"📺 播放對應：{string.Join(", ", successChannels)}");
+                    }
+
+                    _mainWindow.ShowMessage($"🎬 使用 {decodeModeText} + {streamTypeText}");
+
                     // 自動選擇下一個可用區域
                     _splitScreenManager.SelectNextAvailablePlayer();
                 }
@@ -162,12 +193,23 @@ namespace SentryX
                     _mainWindow.ShowMessage("❌ 所有通道播放都失敗，請檢查設備連接狀態");
                 }
 
+                // 如果有失敗的通道，顯示失敗訊息
+                var failedChannels = playbackResults
+                    .Where(r => !r.success)
+                    .Select(r => r.channel + 1)
+                    .ToList();
+
+                if (failedChannels.Any())
+                {
+                    _mainWindow.ShowMessage($"⚠️ 以下通道播放失敗：{string.Join(", ", failedChannels.Select(c => $"CH{c}"))}");
+                }
+
                 return successCount;
             }
             catch (Exception ex)
             {
-                _mainWindow.ShowMessage($"❌ 多通道播放過程中發生錯誤：{ex.Message}");
-                return successCount;
+                _mainWindow.ShowMessage($"❌ 多通道極速播放過程中發生錯誤：{ex.Message}");
+                return 0;
             }
         }
 
@@ -197,14 +239,16 @@ namespace SentryX
             try
             {
                 int stoppedCount = 0;
-                foreach (var player in _splitScreenManager.VideoPlayers)
+
+                // 🔥 同樣使用並行停止，讓停止動作也更快
+                Parallel.ForEach(_splitScreenManager.VideoPlayers, player =>
                 {
                     if (player.IsPlaying)
                     {
                         player.StopPlay();
-                        stoppedCount++;
+                        System.Threading.Interlocked.Increment(ref stoppedCount);
                     }
-                }
+                });
 
                 if (stoppedCount > 0)
                 {

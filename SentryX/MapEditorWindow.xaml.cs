@@ -1,6 +1,8 @@
-﻿using System;
+﻿using Microsoft.Win32;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
@@ -9,22 +11,39 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
-using Microsoft.Win32;
+using System.Windows.Threading;
 using System.Xml.Serialization;
-using System.IO;
 
 namespace SentryX
 {
     // Device 類別 - 增加 Width 和 Height 屬性
-    public class Device
+    public class MapDevice
     {
         public required string Name { get; set; }
         public required string IP { get; set; }
+        public int Port { get; set; } = 37777;
         public bool IsOnline { get; set; }
         public double X { get; set; }
         public double Y { get; set; }
-        public double Width { get; set; } = 40;  // 預設寬度
-        public double Height { get; set; } = 40; // 預設高度
+        public double Width { get; set; } = 40;
+        public double Height { get; set; } = 40;
+
+        // 新增屬性以儲存原始設備資訊
+        public string? DeviceId { get; set; }
+        public int ChannelCount { get; set; } = 0;
+        public string DeviceType { get; set; } = "";
+
+        // 顯示用的屬性
+        public string DisplayText => $"{Name} ({IP}:{Port})";
+        public string StatusText => IsOnline ? "🟢 線上" : "🔴 離線";
+        public string TypeIcon => ChannelCount switch
+        {
+            <= 1 => "📹",
+            <= 4 => "🔲",
+            <= 8 => "🔳",
+            <= 16 => "📺",
+            _ => "🏢"
+        };
     }
 
     // ResizeHandle 枚舉 - 定義縮放控制點位置
@@ -44,43 +63,70 @@ namespace SentryX
     // DeviceControl - 自訂的設備控件類別
     public class DeviceControl : Grid
     {
-        public Device Device { get; set; }
+        public MapDevice Device { get; set; }
         public Border DeviceBorder { get; private set; }
         public Border SelectionBorder { get; private set; }
         public List<Ellipse> ResizeHandles { get; private set; }
         public bool IsSelected { get; set; }
 
-        public DeviceControl(Device device)
+        public DeviceControl(MapDevice device)
         {
             Device = device;
             ResizeHandles = new List<Ellipse>();
-            DeviceBorder = new Border(); // 初始化
-            SelectionBorder = new Border(); // 初始化
+            DeviceBorder = new Border();
+            SelectionBorder = new Border();
             CreateControl();
         }
 
         private void CreateControl()
         {
-            // 建立設備圖標
+            // 根據設備狀態設定顏色
+            var bgColor = Device.IsOnline ? Colors.LightGreen : Colors.LightCoral;
+
             DeviceBorder = new Border
             {
                 Width = Device.Width,
                 Height = Device.Height,
-                Background = System.Windows.Media.Brushes.LightBlue,
+                Background = new SolidColorBrush(bgColor),
                 BorderBrush = System.Windows.Media.Brushes.Black,
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(5)
             };
 
-            var label = new TextBlock
+            // 將 HorizontalAlignment = HorizontalAlignment.Center,
+            // VerticalAlignment = VerticalAlignment.Center
+            // 改為使用類型名稱 System.Windows.HorizontalAlignment.Center
+            // 及 System.Windows.VerticalAlignment.Center
+
+            var stackPanel = new StackPanel
+            {
+                Orientation = System.Windows.Controls.Orientation.Vertical,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                VerticalAlignment = System.Windows.VerticalAlignment.Center
+            };
+
+            // 設備類型圖標
+            var iconText = new TextBlock
+            {
+                Text = Device.TypeIcon,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                FontSize = 14
+            };
+
+            // 設備名稱
+            var nameText = new TextBlock
             {
                 Text = Device.Name,
                 HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
-                VerticalAlignment = System.Windows.VerticalAlignment.Center,
-                TextTrimming = TextTrimming.CharacterEllipsis
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                FontSize = 10,
+                MaxWidth = Device.Width - 4
             };
 
-            DeviceBorder.Child = label;
+            stackPanel.Children.Add(iconText);
+            stackPanel.Children.Add(nameText);
+
+            DeviceBorder.Child = stackPanel;
             this.Children.Add(DeviceBorder);
 
             // 建立選擇框（初始隱藏）
@@ -90,11 +136,10 @@ namespace SentryX
                 BorderThickness = new Thickness(1),
                 Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(20, 30, 144, 255)),
                 Visibility = Visibility.Collapsed,
-                Margin = new Thickness(-5) // 擴大選擇框
+                Margin = new Thickness(-5)
             };
             this.Children.Add(SelectionBorder);
 
-            // 建立8個縮放控制點（初始隱藏）
             CreateResizeHandles();
         }
 
@@ -122,6 +167,13 @@ namespace SentryX
                 ResizeHandles.Add(handle);
                 this.Children.Add(handle);
             }
+        }
+
+        public void UpdateDeviceStatus(bool isOnline)
+        {
+            Device.IsOnline = isOnline;
+            var bgColor = isOnline ? Colors.LightGreen : Colors.LightCoral;
+            DeviceBorder.Background = new SolidColorBrush(bgColor);
         }
 
         private System.Windows.Input.Cursor GetCursorForHandle(ResizeHandle handle)
@@ -269,13 +321,13 @@ namespace SentryX
         public string MapImagePath { get; set; } = string.Empty;
         [XmlArray("Devices")]
         [XmlArrayItem("Device")]
-        public List<Device> Devices { get; set; } = new List<Device>();
+        public List<MapDevice> Devices { get; set; } = new List<MapDevice>();
     }
 
     // MapEditorWindow 類別
     public partial class MapEditorWindow : Window
     {
-        private List<Device> devices = new List<Device>();
+        private List<MapDevice> devices = new List<MapDevice>();
         private List<LayerItem> layers = new List<LayerItem>();
         private bool isEditMode = false;
         private bool isDragging = false;
@@ -292,6 +344,7 @@ namespace SentryX
         private const double ZOOM_STEP = 0.1;
         private const double MAX_ZOOM = 4.9;
         private const double MIN_ZOOM = 0.2;
+        private DispatcherTimer? _refreshTimer;
 
         private string mapDataFolder = System.IO.Path.Combine(Directory.GetCurrentDirectory(), "MapData");
         private string configFilePath => System.IO.Path.Combine(mapDataFolder, "config.xml");
@@ -299,7 +352,7 @@ namespace SentryX
         public MapEditorWindow()
         {
             InitializeComponent();
-            InitializeDeviceList();
+            InitializeRealDeviceList(); // 改用真實設備
             UpdateButtonStates();
             EnsureMapImageExists();
 
@@ -310,16 +363,201 @@ namespace SentryX
 
             LayersList.ItemsSource = layers;
             UpdateLayersList();
+
+            // 初始化自動刷新計時器
+            InitializeRefreshTimer();
+        }
+
+        private void InitializeRefreshTimer()
+        {
+            _refreshTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(3) // 每3秒刷新一次
+            };
+            _refreshTimer.Tick += RefreshTimer_Tick;
+            _refreshTimer.Start();
+        }
+
+        private void RefreshTimer_Tick(object? sender, EventArgs e)
+        {
+            RefreshDeviceList();
+        }
+
+        private void InitializeRealDeviceList()
+        {
+            devices.Clear();
+
+            // 從 DahuaSDK 取得所有已加入的設備
+            var realDevices = DahuaSDK.GetAllDevices();
+
+            if (realDevices.Count > 0)
+            {
+                foreach (var device in realDevices)
+                {
+                    devices.Add(new MapDevice
+                    {
+                        Name = device.Name,
+                        IP = device.IpAddress,
+                        Port = device.Port,
+                        IsOnline = device.IsOnline,
+                        DeviceId = device.Id,
+                        ChannelCount = device.ChannelCount,
+                        DeviceType = GetDeviceTypeName(device.ChannelCount),
+                        Width = 60,  // 稍微加大以顯示圖標和文字
+                        Height = 50
+                    });
+                }
+
+                StatusText.Text = $"已載入 {realDevices.Count} 個設備";
+            }
+            else
+            {
+                // 顯示提示訊息
+                devices.Add(new MapDevice
+                {
+                    Name = "尚未加入設備",
+                    IP = "0.0.0.0",
+                    Port = 0,
+                    IsOnline = false,
+                    Width = 80,
+                    Height = 50
+                });
+
+                StatusText.Text = "請先在設備管理中加入設備";
+            }
+
+            AvailableDevicesList.ItemsSource = devices;
+        }
+
+        private string GetDeviceTypeName(int channelCount)
+        {
+            return channelCount switch
+            {
+                <= 1 => "攝影機",
+                <= 4 => "4路NVR",
+                <= 8 => "8路NVR",
+                <= 16 => "16路NVR",
+                _ => "大型NVR"
+            };
+        }
+
+        private void RefreshDeviceList()
+        {
+            // 保存當前選中的設備
+            var selectedDevice = AvailableDevicesList.SelectedItem as MapDevice;
+
+            // 取得最新設備清單
+            var realDevices = DahuaSDK.GetAllDevices();
+
+            devices.Clear();
+
+            if (realDevices.Count > 0)
+            {
+                foreach (var device in realDevices)
+                {
+                    devices.Add(new MapDevice
+                    {
+                        Name = device.Name,
+                        IP = device.IpAddress,
+                        Port = device.Port,
+                        IsOnline = device.IsOnline,
+                        DeviceId = device.Id,
+                        ChannelCount = device.ChannelCount,
+                        DeviceType = GetDeviceTypeName(device.ChannelCount),
+                        Width = 60,
+                        Height = 50
+                    });
+                }
+            }
+
+            // 更新清單顯示
+            AvailableDevicesList.ItemsSource = null;
+            AvailableDevicesList.ItemsSource = devices;
+
+            // 恢復選中狀態
+            if (selectedDevice != null)
+            {
+                var newSelection = devices.FirstOrDefault(d =>
+                    d.DeviceId == selectedDevice.DeviceId);
+                if (newSelection != null)
+                {
+                    AvailableDevicesList.SelectedItem = newSelection;
+                }
+            }
+
+            // 更新地圖上已放置設備的狀態
+            UpdatePlacedDevicesStatus();
+        }
+
+        private void UpdatePlacedDevicesStatus()
+        {
+            foreach (var control in MapCanvas.Children.OfType<DeviceControl>())
+            {
+                if (control.Device != null)
+                {
+                    // 找到對應的真實設備
+                    var realDevice = devices.FirstOrDefault(d =>
+                        d.DeviceId == control.Device.DeviceId);
+
+                    if (realDevice != null)
+                    {
+                        control.UpdateDeviceStatus(realDevice.IsOnline);
+                    }
+                }
+            }
+        }
+
+        private void UpdateDeviceVisual(DeviceControl control)
+        {
+            if (control.DeviceBorder != null)
+            {
+                // 根據線上狀態改變顏色
+                control.DeviceBorder.Background = control.Device.IsOnline
+                    ? new SolidColorBrush(Colors.LightGreen)
+                    : new SolidColorBrush(Colors.LightCoral);
+            }
+        }
+
+        protected override void OnClosed(EventArgs e)
+        {
+            _refreshTimer?.Stop();
+            _refreshTimer = null;
+            base.OnClosed(e);
         }
 
         private void InitializeDeviceList()
         {
-            devices.AddRange(new[]
+            // 不再使用假資料，改為從 DahuaSDK 取得真實設備
+            devices.Clear();
+
+            // 從 SDK 取得所有已加入的設備
+            var realDevices = DahuaSDK.GetAllDevices();
+
+            foreach (var device in realDevices)
             {
-                new Device { Name = "Camera 1", IP = "192.168.1.101", IsOnline = true },
-                new Device { Name = "Camera 2", IP = "192.168.1.102", IsOnline = false },
-                new Device { Name = "Sensor 1", IP = "192.168.1.103", IsOnline = true }
-            });
+                devices.Add(new MapDevice
+                {
+                    Name = device.Name,
+                    IP = $"{device.IpAddress}:{device.Port}", // 包含 Port 資訊
+                    IsOnline = device.IsOnline,
+                    Width = 40,
+                    Height = 40
+                });
+            }
+
+            // 如果沒有設備，顯示提示
+            if (devices.Count == 0)
+            {
+                devices.Add(new MapDevice
+                {
+                    Name = "尚未加入設備",
+                    IP = "請先在設備管理中加入",
+                    IsOnline = false,
+                    Width = 40,
+                    Height = 40
+                });
+            }
+
             AvailableDevicesList.ItemsSource = devices;
         }
 
@@ -385,7 +623,8 @@ namespace SentryX
             }
         }
 
-        private void AddDeviceToCanvas(Device device, double x, double y)
+        // 將 AddDeviceToCanvas 的參數型別從 Device 改為 MapDevice
+        private void AddDeviceToCanvas(MapDevice device, double x, double y)
         {
             device.X = x;
             device.Y = y;
@@ -403,24 +642,40 @@ namespace SentryX
             UpdateLayersList();
         }
 
+        // 修正所有呼叫 AddDeviceToCanvas 的地方，將 Device 型別改為 MapDevice
         private void AddDeviceButton_Click(object sender, RoutedEventArgs e)
         {
-            if (AvailableDevicesList.SelectedItem is Device selectedDevice)
+            if (AvailableDevicesList.SelectedItem is MapDevice selectedDevice)
             {
-                var newDevice = new Device
+                // 檢查是否為提示訊息
+                if (selectedDevice.DeviceId == null)
+                {
+                    System.Windows.MessageBox.Show("請先在設備管理中加入真實設備。",
+                        "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                // 建立新的設備副本
+                var newDevice = new MapDevice
                 {
                     Name = selectedDevice.Name,
                     IP = selectedDevice.IP,
+                    Port = selectedDevice.Port,
                     IsOnline = selectedDevice.IsOnline,
-                    Width = 40,
-                    Height = 40
+                    DeviceId = selectedDevice.DeviceId,
+                    ChannelCount = selectedDevice.ChannelCount,
+                    DeviceType = selectedDevice.DeviceType,
+                    Width = selectedDevice.Width,
+                    Height = selectedDevice.Height
                 };
+
                 AddDeviceToCanvas(newDevice, 50, 50);
                 UpdateButtonStates();
             }
             else
             {
-                System.Windows.MessageBox.Show("請先選擇一個設備。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                System.Windows.MessageBox.Show("請先選擇一個設備。",
+                    "提示", MessageBoxButton.OK, MessageBoxImage.Information);
             }
         }
 
@@ -704,7 +959,7 @@ namespace SentryX
                     ? bitmap.UriSource.LocalPath
                     : string.Empty;
 
-                var placedDevices = new List<Device>();
+                var placedDevices = new List<MapDevice>();
                 foreach (var control in MapCanvas.Children.OfType<DeviceControl>())
                 {
                     if (control.Device != null)
@@ -767,7 +1022,11 @@ namespace SentryX
                         System.Windows.MessageBox.Show("載入的圖片路徑無效或檔案不存在。", "警告", MessageBoxButton.OK, MessageBoxImage.Warning);
                     }
 
-                    devices = config.Devices ?? new List<Device>();
+                    // 原本錯誤的程式碼：
+                    // devices = config.Devices ?? new List<Device>();
+
+                    // 修正方式：將 new List<Device>() 改為 new List<MapDevice>()
+                    devices = config.Devices ?? new List<MapDevice>();
                     foreach (var device in devices)
                     {
                         if (device.X != 0 || device.Y != 0)
@@ -824,28 +1083,34 @@ namespace SentryX
                 .ToList();
         }
 
+        // 修正 AvailableDevicesList_MouseDoubleClick 事件
         private void AvailableDevicesList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
         {
-            if (isEditMode && AvailableDevicesList.SelectedItem is Device selectedDevice)
+            if (isEditMode && AvailableDevicesList.SelectedItem is MapDevice selectedDevice)
             {
-                var newDevice = new Device
+                var newDevice = new MapDevice
                 {
                     Name = selectedDevice.Name,
                     IP = selectedDevice.IP,
+                    Port = selectedDevice.Port,
                     IsOnline = selectedDevice.IsOnline,
-                    Width = 40,
-                    Height = 40
+                    DeviceId = selectedDevice.DeviceId,
+                    ChannelCount = selectedDevice.ChannelCount,
+                    DeviceType = selectedDevice.DeviceType,
+                    Width = selectedDevice.Width,
+                    Height = selectedDevice.Height
                 };
                 AddDeviceToCanvas(newDevice, 50, 50);
                 UpdateButtonStates();
             }
         }
 
+        // 修正 MapCanvas_Drop 事件
         private void MapCanvas_Drop(object sender, System.Windows.DragEventArgs e)
         {
-            if (e.Data.GetDataPresent(typeof(Device)))
+            if (e.Data.GetDataPresent(typeof(MapDevice)))
             {
-                var device = e.Data.GetData(typeof(Device)) as Device;
+                var device = e.Data.GetData(typeof(MapDevice)) as MapDevice;
                 if (device != null)
                 {
                     var point = e.GetPosition(MapCanvas);

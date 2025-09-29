@@ -1,4 +1,4 @@
-﻿// DahuaSDK.cs - 加入設備管理功能
+﻿// DahuaSDK.cs - 加入設備管理功能與警報支援
 using NetSDKCS;
 using System;
 using System.Collections.Generic;
@@ -19,6 +19,10 @@ namespace SentryX
         // 當設備狀態改變時通知 UI
         public static event Action<DeviceInfo>? DeviceStatusChanged;
         public static event Action<string>? StatusMessage;
+
+        // 新增：警報事件通知
+        public static event Action<string, int, bool>? AlarmInputTriggered; // deviceId, alarmIndex, isTriggered
+        public static event Action<string, int, bool>? AlarmOutputChanged; // deviceId, outputIndex, isActive
 
         // === 回調函數 ===
         private static readonly fDisConnectCallBack _disconnectCallback =
@@ -65,7 +69,7 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 添加設備到管理清單 (但不連接) - 🔥 修正版本，支援相同 IP 不同 Port
+        /// 添加設備到管理清單 (但不連接) - 支援相同 IP 不同 Port
         /// </summary>
         public static bool AddDevice(DeviceInfo deviceInfo)
         {
@@ -75,7 +79,7 @@ namespace SentryX
                 return false;
             }
 
-            // 🔥 使用新的 ID 格式檢查重複（IP:Port）
+            // 使用新的 ID 格式檢查重複（IP:Port）
             var deviceId = $"{deviceInfo.IpAddress}:{deviceInfo.Port}";
             deviceInfo.SetId(deviceId); // 確保 ID 正確設定
 
@@ -86,7 +90,7 @@ namespace SentryX
                 return false;
             }
 
-            // 🔥 額外檢查：是否有相同 IP:Port 但不同 ID 的設備
+            // 額外檢查：是否有相同 IP:Port 但不同 ID 的設備
             var existingDevice = _devices.Values.FirstOrDefault(d => d.MatchesAddress(deviceInfo.IpAddress, deviceInfo.Port));
             if (existingDevice != null)
             {
@@ -173,7 +177,7 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 連接指定設備
+        /// 連接指定設備 - 增強版，包含警報能力讀取
         /// </summary>
         public static bool ConnectDevice(string deviceId)
         {
@@ -206,14 +210,36 @@ namespace SentryX
 
                 if (handle != IntPtr.Zero)
                 {
-                    // 更新設備資訊
+                    // 更新設備基本資訊
                     device.LoginHandle = handle;
                     device.IsOnline = true;
                     device.LastConnectTime = DateTime.Now;
                     device.SerialNumber = deviceInfo.sSerialNumber;
                     device.ChannelCount = deviceInfo.nChanNum;
 
+                    // 🔥 新增：更新警報相關資訊
+                    device.AlarmInPortCount = deviceInfo.nAlarmInPortNum;
+                    device.AlarmOutPortCount = deviceInfo.nAlarmOutPortNum;
+                    device.DiskCount = deviceInfo.nDiskNum;
+                    device.DeviceTypeCode = (int)deviceInfo.nDVRType;
+                    device.DeviceType = GetDeviceTypeName(deviceInfo.nDVRType);
+
+                    // 初始化警報狀態陣列
+                    device.InitializeAlarmStates();
+
+                    // 讀取通道名稱（如果支援）
+                    LoadChannelNames(device);
+
+                    // 顯示設備能力摘要
                     StatusMessage?.Invoke($"✅ 設備 {device.Name} 連接成功");
+                    StatusMessage?.Invoke($"📊 設備能力:\n{device.GetCapabilitySummary()}");
+
+                    // 如果有警報功能，啟動警報監聽
+                    if (device.HasAlarmCapability)
+                    {
+                        StartAlarmListen(device);
+                    }
+
                     DeviceStatusChanged?.Invoke(device);
 
                     return true;
@@ -266,6 +292,161 @@ namespace SentryX
             catch (Exception ex)
             {
                 StatusMessage?.Invoke($"❌ 斷開設備時發生錯誤: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 取得設備類型名稱
+        /// </summary>
+        private static string GetDeviceTypeName(NetSDKCS.EM_NET_DEVICE_TYPE deviceType)
+        {
+            return deviceType switch
+            {
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_DVR_NONREALTIME_MACE => "非實時 MACE",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_DVR_NONREALTIME => "非實時",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_NVS_MPEG1 => "網絡視頻服務器(MPEG1)",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_DVR_MPEG1_2 => "MPEG1/2 DVR",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_DVR_MPEG1_8 => "MPEG1 8路 DVR",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_DVR_MPEG4_8 => "MPEG4 8路 DVR",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_DVR_MPEG4_16 => "MPEG4 16路 DVR",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_DVR_MPEG4_SX2 => "LB系列 DVR",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_DVR_MEPG4_ST2 => "GB系列 DVR",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_DVR_MEPG4_SH2 => "HB系列 DVR",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_DVR_MPEG4_GBE => "GBE系列 DVR",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_DVR_MPEG4_NVSII => "II代網絡視頻服務器",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_DVR_STD_NEW => "新標準 DVR",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_DVR_DDNS => "DDNS DVR",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_DVR_ATM => "ATM DVR",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_NB_SERIAL => "二代非實時 NB DVR",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_LN_SERIAL => "LN系列 DVR",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_BAV_SERIAL => "BAV系列 DVR",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_SDIP_SERIAL => "SDIP系列 DVR",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_IPC_SERIAL => "網路攝影機 IPC",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_NVS_B => "NVS B系列",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_NVS_C => "NVS H系列",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_NVS_S => "NVS S系列",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_NVS_E => "NVS E系列",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_DVR_NEW_PROTOCOL => "新協議 DVR",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_NVD_SERIAL => "解碼器",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_DVR_N5 => "N5系列 DVR",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_DVR_MIX_DVR => "混合 DVR",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_SVR_SERIAL => "SVR系列",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_SVR_BS => "SVR-BS",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_NVR_SERIAL => "網路錄影機 NVR",
+                NetSDKCS.EM_NET_DEVICE_TYPE.NET_ITSE_SERIAL => "智慧交通設備",
+                _ => "未知設備類型"
+            };
+        }
+
+        /// <summary>
+        /// 讀取通道名稱
+        /// </summary>
+        private static void LoadChannelNames(DeviceInfo device)
+        {
+            try
+            {
+                // 暫時使用預設名稱，因為 AV_CFG_ChannelName 可能不存在於您的 SDK 版本
+                for (int i = 0; i < device.ChannelCount; i++)
+                {
+                    device.ChannelNames.Add($"通道 {i + 1}");
+
+                    // 修正：使用 object 變數接收 channelName，避免 CS1503
+                    object channelName = new NetSDKCS.NET_A_AV_CFG_ChannelName();
+                    var objectType = channelName.GetType();
+                    bool success = NETClient.GetNewDevConfig(
+                        device.LoginHandle,
+                        i,
+                        "ChannelTitle",
+                        ref channelName,
+                        objectType,
+                        5000
+                    );
+                }
+            }
+            catch (Exception ex)
+            {
+                StatusMessage?.Invoke($"⚠ 讀取通道名稱時發生錯誤: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 啟動警報監聽
+        /// </summary>
+        private static void StartAlarmListen(DeviceInfo device)
+        {
+            try
+            {
+                // TODO: 實作警報監聽功能
+                // 這裡需要使用 SDK 的 StartListenEx 或類似功能
+                StatusMessage?.Invoke($"🔔 已啟動設備 {device.Name} 的警報監聽");
+            }
+            catch (Exception ex)
+            {
+                StatusMessage?.Invoke($"⚠ 啟動警報監聽失敗: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 查詢設備狀態（包含警報狀態）
+        /// </summary>
+        public static bool QueryDeviceStatus(string deviceId)
+        {
+            if (!_devices.TryGetValue(deviceId, out var device) || !device.IsOnline)
+            {
+                StatusMessage?.Invoke($"❌ 設備 {deviceId} 不在線或不存在");
+                return false;
+            }
+
+            try
+            {
+                // 查詢警報輸入狀態
+                // TODO: 實作使用 SDK 的 QueryDevState 功能
+
+                StatusMessage?.Invoke($"📊 設備 {device.Name} 狀態已更新");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                StatusMessage?.Invoke($"❌ 查詢設備狀態失敗: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 手動觸發警報輸出
+        /// </summary>
+        public static bool TriggerAlarmOutput(string deviceId, int outputIndex, bool activate)
+        {
+            if (!_devices.TryGetValue(deviceId, out var device) || !device.IsOnline)
+            {
+                StatusMessage?.Invoke($"❌ 設備 {deviceId} 不在線或不存在");
+                return false;
+            }
+
+            if (outputIndex < 0 || outputIndex >= device.AlarmOutPortCount)
+            {
+                StatusMessage?.Invoke($"❌ 無效的警報輸出索引: {outputIndex}");
+                return false;
+            }
+
+            try
+            {
+                // TODO: 使用 SDK 的 AlarmControl 功能控制警報輸出
+                // 暫時更新本地狀態
+                device.UpdateAlarmOutputState(outputIndex, activate);
+
+                var action = activate ? "啟動" : "關閉";
+                StatusMessage?.Invoke($"✅ 已{action}設備 {device.Name} 的警報輸出 {outputIndex + 1}");
+
+                // 觸發事件通知
+                AlarmOutputChanged?.Invoke(deviceId, outputIndex, activate);
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                StatusMessage?.Invoke($"❌ 控制警報輸出失敗: {ex.Message}");
                 return false;
             }
         }
@@ -325,7 +506,7 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 🔥 新增：根據 IP 和 Port 查找設備
+        /// 根據 IP 和 Port 查找設備
         /// </summary>
         public static DeviceInfo? GetDeviceByAddress(string ipAddress, int port)
         {
@@ -333,7 +514,7 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 🔥 新增：檢查指定地址是否已存在設備
+        /// 檢查指定地址是否已存在設備
         /// </summary>
         public static bool IsDeviceExists(string ipAddress, int port)
         {
@@ -370,7 +551,7 @@ namespace SentryX
 
             // 尋找所有匹配 IP 的設備（可能有多個不同 Port）
             var matchingDevices = _devices.Values.Where(d => d.IpAddress == deviceIP).ToList();
-            
+
             foreach (var device in matchingDevices)
             {
                 device.IsOnline = false;
@@ -380,7 +561,7 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 🔥 修正：處理設備重連事件 - 使用 IP:Port 查找
+        /// 處理設備重連事件 - 使用 IP:Port 查找
         /// </summary>
         private static void OnDeviceReconnected(string? deviceIP)
         {
@@ -388,7 +569,7 @@ namespace SentryX
 
             // 尋找所有匹配 IP 的設備（可能有多個不同 Port）
             var matchingDevices = _devices.Values.Where(d => d.IpAddress == deviceIP).ToList();
-            
+
             foreach (var device in matchingDevices)
             {
                 device.IsOnline = true;

@@ -135,12 +135,8 @@ namespace SentryX
         }
 
         /// <summary>
-        /// 向後相容的 Login 方法 - 簡化版本
+        /// 較舊版本的 Login 方法
         /// </summary>
-        /// <param name="ip">設備 IP</param>
-        /// <param name="user">用戶名</param>
-        /// <param name="pass">密碼</param>
-        /// <returns>登入句柄</returns>
         public static IntPtr Login(string ip, string user = "admin", string pass = "123456")
         {
             try
@@ -346,22 +342,58 @@ namespace SentryX
         {
             try
             {
-                // 暫時使用預設名稱，因為 AV_CFG_ChannelName 可能不存在於您的 SDK 版本
+                device.ChannelNames.Clear();
+
                 for (int i = 0; i < device.ChannelCount; i++)
                 {
-                    device.ChannelNames.Add($"通道 {i + 1}");
+                    // 預設名稱（當 SDK 無法取得時使用）
+                    string channelDisplayName = $"通道 {i + 1}";
 
-                    // 修正：使用 object 變數接收 channelName，避免 CS1503
-                    object channelName = new NetSDKCS.NET_A_AV_CFG_ChannelName();
-                    var objectType = channelName.GetType();
+                    // 準備 struct，必須先設定 nStructSize
+                    var chStruct = new NetSDKCS.NET_A_AV_CFG_ChannelName
+                    {
+                        nStructSize = Marshal.SizeOf(typeof(NetSDKCS.NET_A_AV_CFG_ChannelName)),
+                        szName = string.Empty
+                    };
+
+                    object channelNameObj = chStruct;
+                    var objectType = channelNameObj.GetType();
+
+                    // 嘗試使用 GetNewDevConfig 取得通道名稱
                     bool success = NETClient.GetNewDevConfig(
                         device.LoginHandle,
                         i,
                         "ChannelTitle",
-                        ref channelName,
+                        ref channelNameObj,
                         objectType,
                         5000
                     );
+
+                    if (success)
+                    {
+                        try
+                        {
+                            // 解除封箱並讀取名稱，去掉可能的尾端 null 字元
+                            var result = (NetSDKCS.NET_A_AV_CFG_ChannelName)channelNameObj;
+                            if (!string.IsNullOrWhiteSpace(result.szName))
+                            {
+                                channelDisplayName = result.szName.TrimEnd('\0').Trim();
+                            }
+                        }
+                        catch
+                        {
+                            // 若解除封箱失敗，保留預設名稱
+                        }
+                    }
+                    else
+                    {
+                        // 可選：記錄錯誤碼以便除錯
+                        var err = NETClient.GetLastError();
+                        StatusMessage?.Invoke($"⚠ 無法讀取設備通道名稱 (channel {i})，SDK 錯誤: {err}");
+                        // 若需要更可靠的策略，可在此嘗試 NETClient.QueryChannelName() 作為 fallback
+                    }
+
+                    device.ChannelNames.Add(channelDisplayName);
                 }
             }
             catch (Exception ex)

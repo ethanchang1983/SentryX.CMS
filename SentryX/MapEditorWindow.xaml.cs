@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Windows;
@@ -13,22 +14,21 @@ using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using System.Xml.Serialization;
-
 // === 解決命名空間衝突的 using alias ===
 using Brushes = System.Windows.Media.Brushes;
-using MessageBox = System.Windows.MessageBox;
 using Color = System.Windows.Media.Color;
 using Cursor = System.Windows.Input.Cursor;
 using Cursors = System.Windows.Input.Cursors;
-using Point = System.Windows.Point;
-using Path = System.IO.Path;
-using Image = System.Windows.Controls.Image;
-using OpenFileDialog = Microsoft.Win32.OpenFileDialog;
-using MouseEventArgs = System.Windows.Input.MouseEventArgs;
-using DragEventArgs = System.Windows.DragEventArgs;
 using DragDropEffects = System.Windows.DragDropEffects;
-using Orientation = System.Windows.Controls.Orientation;
+using DragEventArgs = System.Windows.DragEventArgs;
 using HorizontalAlignment = System.Windows.HorizontalAlignment;
+using Image = System.Windows.Controls.Image;
+using MessageBox = System.Windows.MessageBox;
+using MouseEventArgs = System.Windows.Input.MouseEventArgs;
+using OpenFileDialog = Microsoft.Win32.OpenFileDialog;
+using Orientation = System.Windows.Controls.Orientation;
+using Path = System.IO.Path;
+using Point = System.Windows.Point;
 using VerticalAlignment = System.Windows.VerticalAlignment;
 
 
@@ -832,36 +832,48 @@ namespace SentryX
                 current = current.Parent as FrameworkElement;
             }
 
-            if (clickedControl != null && isEditMode)
+            if (clickedControl != null)
             {
-                var localPoint = e.GetPosition(clickedControl);
-                var handle = clickedControl.GetHandleAt(localPoint);
-
-                if (handle != ResizeHandle.None)
+                // === 檢視模式：點擊播放視頻 ===
+                if (!isEditMode)
                 {
-                    isResizing = true;
-                    activeResizeHandle = handle;
-                    resizeStartPoint = point;
-                    initialWidth = clickedControl.Device.Width;
-                    initialHeight = clickedControl.Device.Height;
-                    MapCanvas.CaptureMouse();
+                    OpenVideoPlayer(clickedControl.Device);
                     e.Handled = true;
                     return;
                 }
 
-                if (selectedControl != null && selectedControl != clickedControl)
+                // === 編輯模式：原有的拖拽和調整大小邏輯 ===
+                if (isEditMode)
                 {
-                    selectedControl.HideSelection();
+                    var localPoint = e.GetPosition(clickedControl);
+                    var handle = clickedControl.GetHandleAt(localPoint);
+
+                    if (handle != ResizeHandle.None)
+                    {
+                        isResizing = true;
+                        activeResizeHandle = handle;
+                        resizeStartPoint = point;
+                        initialWidth = clickedControl.Device.Width;
+                        initialHeight = clickedControl.Device.Height;
+                        MapCanvas.CaptureMouse();
+                        e.Handled = true;
+                        return;
+                    }
+
+                    if (selectedControl != null && selectedControl != clickedControl)
+                    {
+                        selectedControl.HideSelection();
+                    }
+
+                    selectedControl = clickedControl;
+                    selectedControl.ShowSelection();
+
+                    isDragging = true;
+                    draggedControl = clickedControl;
+                    dragStartPoint = point;
+                    MapCanvas.CaptureMouse();
+                    e.Handled = true;
                 }
-
-                selectedControl = clickedControl;
-                selectedControl.ShowSelection();
-
-                isDragging = true;
-                draggedControl = clickedControl;
-                dragStartPoint = point;
-                MapCanvas.CaptureMouse();
-                e.Handled = true;
             }
             else
             {
@@ -882,6 +894,67 @@ namespace SentryX
             }
 
             UpdateButtonStates();
+        }
+
+        // === 新增方法：開啟視頻播放器 ===
+        private void OpenVideoPlayer(MapDevice mapDevice)
+        {
+            try
+            {
+                if (mapDevice == null || string.IsNullOrEmpty(mapDevice.DeviceId))
+                {
+                    MessageBox.Show("無效的設備資訊", "錯誤", MessageBoxButton.OK, MessageBoxImage.Error);
+                    return;
+                }
+
+                // 解析 DeviceId 獲取設備和通道資訊
+                string deviceId = mapDevice.DeviceId;
+                int channel = 0;
+
+                // 如果是通道項目，提取通道號
+                if (mapDevice.DeviceType == "Channel" && deviceId.Contains("_CH"))
+                {
+                    var parts = deviceId.Split(new[] { "_CH" }, StringSplitOptions.None);
+                    if (parts.Length == 2 && int.TryParse(parts[1], out int ch))
+                    {
+                        deviceId = parts[0]; // 設備 ID
+                        channel = ch;        // 通道號
+                    }
+                }
+
+                // 獲取設備資訊
+                var device = DahuaSDK.GetDevice(deviceId);
+                if (device == null)
+                {
+                    MessageBox.Show("找不到對應的設備", "錯誤", MessageBoxButton.OK, MessageBoxImage.Error);
+                    return;
+                }
+
+                if (!device.IsOnline)
+                {
+                    MessageBox.Show($"設備 {device.Name} 目前離線", "提示",
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                // 獲取通道名稱
+                string channelName = channel < device.ChannelNames.Count
+                    ? device.ChannelNames[channel]
+                    : $"通道 {channel + 1}";
+
+                // 創建並顯示播放視窗
+                var playerWindow = new VideoPlayerWindow();
+                playerWindow.StartPlay(deviceId, channel, device.Name, channelName);
+                playerWindow.Show();
+
+                StatusText.Text = $"已開啟 {device.Name} - {channelName} 的視頻播放";
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"開啟視頻播放器失敗: {ex.Message}", "錯誤",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+                Debug.WriteLine($"OpenVideoPlayer 錯誤: {ex.Message}");
+            }
         }
 
         private void MapCanvas_MouseMove(object sender, MouseEventArgs e)

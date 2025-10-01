@@ -214,22 +214,96 @@
                 </ScrollViewer>
             </GroupBox>
 
-            <!-- 右側：圖層設計器 -->
-            <GroupBox Grid.Column="2" Header="圖層設計器" Margin="5">
-                <ListBox Name="LayersList" 
-                         Margin="5"
-                         SelectionMode="Single">
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
-                            <StackPanel Orientation="Horizontal">
-                                <CheckBox IsChecked="{Binding Visibility, Converter={StaticResource BoolToVisibilityConverter}, Mode=TwoWay}" 
-                                          Content="{Binding Name}" 
-                                          ToolTip="切換圖層可見性"/>
-                                <!-- 可以添加更多控制，如鎖定圖標等 -->
-                            </StackPanel>
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
+            <!-- 右側：圖層設計器和設備屬性調整 -->
+            <GroupBox Grid.Column="2" Header="圖層設計器與設備屬性" Margin="5">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="5"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- 圖層列表 -->
+                    <ListBox Name="LayersList" 
+                             Grid.Row="0"
+                             Margin="5"
+                             SelectionMode="Single">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal">
+                                    <CheckBox IsChecked="{Binding Visibility, Converter={StaticResource BoolToVisibilityConverter}, Mode=TwoWay}" 
+                                              Content="{Binding Name}" 
+                                              ToolTip="切換圖層可見性"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <!-- 分隔線 -->
+                    <GridSplitter Grid.Row="1" Height="5" 
+                                 HorizontalAlignment="Stretch" 
+                                 Background="Gray"
+                                 ResizeBehavior="PreviousAndNext"/>
+
+                    <!-- 設備屬性調整面板 -->
+                    <GroupBox Grid.Row="2" Header="設備屬性調整" 
+                              Margin="5" Padding="5"
+                              MinHeight="200">
+                        <StackPanel Name="DevicePropertiesPanel" IsEnabled="False">
+
+                            <!-- 設備名稱顯示 -->
+                            <TextBlock Text="選中設備:" FontWeight="Bold" Margin="0,0,0,5"/>
+                            <TextBlock Name="SelectedDeviceNameText" 
+                                      Text="未選擇設備" 
+                                      Foreground="Gray"
+                                      Margin="0,0,0,10"/>
+
+                            <!-- X 座標調整 -->
+                            <TextBlock Text="X 座標 (px):" Margin="0,5,0,2"/>
+                            <TextBox Name="DeviceXTextBox" 
+                                    Text="0" 
+                                    Margin="0,0,0,5"
+                                    TextChanged="DevicePositionTextBox_TextChanged"/>
+
+                            <!-- Y 座標調整 -->
+                            <TextBlock Text="Y 座標 (px):" Margin="0,10,0,2"/>
+                            <TextBox Name="DeviceYTextBox" 
+                                    Text="0" 
+                                    Margin="0,0,0,5"
+                                    TextChanged="DevicePositionTextBox_TextChanged"/>
+
+                            <!-- 寬度調整 -->
+                            <TextBlock Text="寬度 (px):" Margin="0,10,0,2"/>
+                            <TextBox Name="DeviceWidthTextBox" 
+                                    Text="60" 
+                                    Margin="0,0,0,5"
+                                    TextChanged="DeviceSizeTextBox_TextChanged"/>
+
+                            <!-- 高度調整 -->
+                            <TextBlock Text="高度 (px):" Margin="0,10,0,2"/>
+                            <TextBox Name="DeviceHeightTextBox" 
+                                    Text="60" 
+                                    Margin="0,0,0,5"
+                                    TextChanged="DeviceSizeTextBox_TextChanged"/>
+
+                            <!-- 快速調整按鈕 -->
+                            <Separator Margin="0,10,0,10"/>
+                            <TextBlock Text="快速調整:" FontWeight="Bold" Margin="0,0,0,5"/>
+                            <WrapPanel>
+                                <Button Content="重置大小 (60×60)" 
+                                       Margin="2" Padding="5,2"
+                                       Click="ResetSize_Click"
+                                       ToolTip="重置為預設大小"/>
+                                <Button Content="對齊網格" 
+                                       Margin="2" Padding="5,2"
+                                       Click="AlignToGrid_Click"
+                                       ToolTip="對齊到 10px 網格"/>
+                            </WrapPanel>
+
+                        </StackPanel>
+                    </GroupBox>
+
+                </Grid>
             </GroupBox>
         </Grid>
 

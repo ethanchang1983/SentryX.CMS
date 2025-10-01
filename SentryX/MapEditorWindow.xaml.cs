@@ -85,6 +85,8 @@ namespace SentryX
         public List<Ellipse> ResizeHandles { get; private set; }
         public bool IsSelected { get; set; }
 
+        private bool isUpdatingProperties = false;
+
         public DeviceControl(MapDevice device)
         {
             Device = device;
@@ -345,6 +347,7 @@ namespace SentryX
         private string mapDataFolder = Path.Combine(Directory.GetCurrentDirectory(), "MapData");
         private string configFilePath => Path.Combine(mapDataFolder, "config.xml");
 
+        private bool isUpdatingProperties = false;
         public MapEditorWindow()
         {
             InitializeComponent();
@@ -752,6 +755,7 @@ namespace SentryX
             {
                 selectedControl.HideSelection();
                 selectedControl = null;
+                UpdateDevicePropertiesPanel(); // 切換模式時更新面板
             }
 
             UpdateButtonStates();
@@ -763,6 +767,7 @@ namespace SentryX
             {
                 MapCanvas.Children.Remove(selectedControl);
                 selectedControl = null;
+                UpdateDevicePropertiesPanel(); // 刪除後更新面板
                 DeviceCountText.Text = $"設備數量: {MapCanvas.Children.OfType<DeviceControl>().Count()}";
                 UpdateButtonStates();
                 UpdateLayersList();
@@ -867,6 +872,7 @@ namespace SentryX
 
                     selectedControl = clickedControl;
                     selectedControl.ShowSelection();
+                    UpdateDevicePropertiesPanel(); // 選中設備時更新面板
 
                     isDragging = true;
                     draggedControl = clickedControl;
@@ -881,6 +887,7 @@ namespace SentryX
                 {
                     selectedControl.HideSelection();
                     selectedControl = null;
+                    UpdateDevicePropertiesPanel(); // 取消選擇時更新面板
                 }
 
                 if (MapImage.Source != null && !isEditMode)
@@ -1002,6 +1009,13 @@ namespace SentryX
                 }
 
                 selectedControl.UpdateSize(newWidth, newHeight);
+
+                // 即時更新面板顯示
+                isUpdatingProperties = true;
+                DeviceWidthTextBox.Text = newWidth.ToString("F0");
+                DeviceHeightTextBox.Text = newHeight.ToString("F0");
+                isUpdatingProperties = false;
+
                 MousePositionText.Text = $"大小: {newWidth:0} x {newHeight:0}";
             }
             else if (isDragging && draggedControl != null)
@@ -1019,6 +1033,12 @@ namespace SentryX
                 {
                     draggedControl.Device.X = newX;
                     draggedControl.Device.Y = newY;
+
+                    // 即時更新面板顯示
+                    isUpdatingProperties = true;
+                    DeviceXTextBox.Text = newX.ToString("F0");
+                    DeviceYTextBox.Text = newY.ToString("F0");
+                    isUpdatingProperties = false;
                 }
 
                 MousePositionText.Text = $"座標: {newX:0}, {newY:0}";
@@ -1318,6 +1338,93 @@ namespace SentryX
 
             LayersList.ItemsSource = null;
             LayersList.ItemsSource = layers;
+        }
+
+        // === 更新選中設備時調用 ===
+        private void UpdateDevicePropertiesPanel()
+        {
+            if (selectedControl != null && selectedControl.Device != null)
+            {
+                isUpdatingProperties = true;
+
+                DevicePropertiesPanel.IsEnabled = true;
+                SelectedDeviceNameText.Text = selectedControl.Device.Name;
+                SelectedDeviceNameText.Foreground = Brushes.Black;
+
+                DeviceXTextBox.Text = selectedControl.Device.X.ToString("F0");
+                DeviceYTextBox.Text = selectedControl.Device.Y.ToString("F0");
+                DeviceWidthTextBox.Text = selectedControl.Device.Width.ToString("F0");
+                DeviceHeightTextBox.Text = selectedControl.Device.Height.ToString("F0");
+
+                isUpdatingProperties = false;
+            }
+            else
+            {
+                DevicePropertiesPanel.IsEnabled = false;
+                SelectedDeviceNameText.Text = "未選擇設備";
+                SelectedDeviceNameText.Foreground = Brushes.Gray;
+
+                DeviceXTextBox.Text = "0";
+                DeviceYTextBox.Text = "0";
+                DeviceWidthTextBox.Text = "60";
+                DeviceHeightTextBox.Text = "60";
+            }
+        }
+
+        // === 座標文字框變更事件 ===
+        private void DevicePositionTextBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (isUpdatingProperties || selectedControl == null) return;
+
+            if (double.TryParse(DeviceXTextBox.Text, out double x) &&
+                double.TryParse(DeviceYTextBox.Text, out double y))
+            {
+                Canvas.SetLeft(selectedControl, x);
+                Canvas.SetTop(selectedControl, y);
+
+                selectedControl.Device.X = x;
+                selectedControl.Device.Y = y;
+
+                MousePositionText.Text = $"座標: {x:0}, {y:0}";
+            }
+        }
+
+        // === 大小文字框變更事件 ===
+        private void DeviceSizeTextBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (isUpdatingProperties || selectedControl == null) return;
+
+            if (double.TryParse(DeviceWidthTextBox.Text, out double width) &&
+                double.TryParse(DeviceHeightTextBox.Text, out double height))
+            {
+                selectedControl.UpdateSize(width, height);
+                MousePositionText.Text = $"大小: {width:0} x {height:0}";
+            }
+        }
+
+        // === 重置大小按鈕 ===
+        private void ResetSize_Click(object sender, RoutedEventArgs e)
+        {
+            if (selectedControl != null)
+            {
+                DeviceWidthTextBox.Text = "60";
+                DeviceHeightTextBox.Text = "60";
+            }
+        }
+
+        // === 對齊網格按鈕 ===
+        private void AlignToGrid_Click(object sender, RoutedEventArgs e)
+        {
+            if (selectedControl != null)
+            {
+                double gridSize = 10;
+
+                double x = Math.Round(selectedControl.Device.X / gridSize) * gridSize;
+                double y = Math.Round(selectedControl.Device.Y / gridSize) * gridSize;
+
+                DeviceXTextBox.Text = x.ToString("F0");
+                DeviceYTextBox.Text = y.ToString("F0");
+            }
         }
 
         protected override void OnClosed(EventArgs e)

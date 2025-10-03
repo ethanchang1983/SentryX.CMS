@@ -22,7 +22,9 @@
 
   <ItemGroup>
     <None Remove="Resources\alarm_input_icon.png" />
+    <None Remove="Resources\alarm_input_icon_1.gif" />
     <None Remove="Resources\camera_icon.png" />
+    <None Remove="Resources\camera_icon_1.gif" />
   </ItemGroup>
 
   <ItemGroup>
@@ -39,7 +41,9 @@
 
   <ItemGroup>
     <Resource Include="Resources\alarm_input_icon.png" />
+    <Resource Include="Resources\alarm_input_icon_1.gif" />
     <Resource Include="Resources\camera_icon.png" />
+    <Resource Include="Resources\camera_icon_1.gif" />
   </ItemGroup>
 
 </Project>

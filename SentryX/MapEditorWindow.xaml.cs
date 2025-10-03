@@ -438,66 +438,30 @@ namespace SentryX
                 BorderBrush = Brushes.Transparent,
                 BorderThickness = new Thickness(0),
                 ClipToBounds = false,
-                // ✅ 添加 ToolTip
                 ToolTip = Device.Name
             };
 
             if (Device.DeviceType == "Channel")
             {
-                var grid = new Grid();
-                grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-
-                var image = new Image
-                {
-                    Stretch = Stretch.Uniform,
-                    Margin = new Thickness(5)
-                };
-
-                try
-                {
-                    var bitmap = new BitmapImage(new Uri("pack://application:,,,/Resources/camera_icon.png"));
-                    image.Source = bitmap;
-                    grid.Children.Add(image);
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine($"載入圖片失敗: {ex.Message}");
-                    var iconText = new TextBlock
-                    {
-                        Text = "📹",
-                        HorizontalAlignment = HorizontalAlignment.Center,
-                        VerticalAlignment = VerticalAlignment.Center,
-                        FontSize = 20
-                    };
-                    grid.Children.Add(iconText);
-                }
-
-                DeviceBorder.Child = grid;
+                CreateChannelControl();
+            }
+            else if (Device.DeviceType == "AlarmIn")
+            {
+                // ✅ 新增：警報輸入控件
+                CreateAlarmInputControl();
+            }
+            else if (Device.DeviceType == "AlarmOut")
+            {
+                // ✅ 新增：警報輸出控件
+                CreateAlarmOutputControl();
             }
             else
             {
-                var stackPanel = new StackPanel
-                {
-                    Orientation = Orientation.Vertical,
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    VerticalAlignment = VerticalAlignment.Center
-                };
-
-                var iconText = new TextBlock
-                {
-                    Text = Device.TypeIcon,
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    FontSize = 14
-                };
-
-                stackPanel.Children.Add(iconText);
-                DeviceBorder.Child = stackPanel;
+                // 其他設備類型
+                CreateDefaultControl();
             }
 
             this.Children.Add(DeviceBorder);
-
-            // ✅ 不再需要文字元素，移除這部分
-            // var nameText = new TextBlock ...
 
             SelectionBorder = new Border
             {
@@ -519,6 +483,130 @@ namespace SentryX
             this.Children.Add(HandleContainer);
 
             CreateResizeHandles();
+        }
+
+        // ✅ 將原本的視頻通道代碼提取為獨立方法
+        private void CreateChannelControl()
+        {
+            var grid = new Grid();
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+            var image = new Image
+            {
+                Stretch = Stretch.Uniform,
+                Margin = new Thickness(5)
+            };
+
+            try
+            {
+                var bitmap = new BitmapImage(new Uri("pack://application:,,,/Resources/camera_icon.png"));
+                image.Source = bitmap;
+                grid.Children.Add(image);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"載入圖片失敗: {ex.Message}");
+                var iconText = new TextBlock
+                {
+                    Text = "📹",
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    FontSize = 20
+                };
+                grid.Children.Add(iconText);
+            }
+
+            DeviceBorder.Child = grid;
+        }
+
+        // ✅ 新增：警報輸入控件
+        private void CreateAlarmInputControl()
+        {
+            var grid = new Grid();
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+            var image = new Image
+            {
+                Stretch = Stretch.Uniform,
+                Margin = new Thickness(5)
+            };
+
+            try
+            {
+                var bitmap = new BitmapImage(new Uri("pack://application:,,,/Resources/alarm_input_icon.png"));
+                image.Source = bitmap;
+                grid.Children.Add(image);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"載入警報輸入圖片失敗: {ex.Message}");
+                // 如果找不到圖片，使用 Emoji 作為備用
+                var iconText = new TextBlock
+                {
+                    Text = "🔔",
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    FontSize = 20
+                };
+                grid.Children.Add(iconText);
+            }
+
+            DeviceBorder.Child = grid;
+        }
+
+        // ✅ 新增：警報輸出控件
+        private void CreateAlarmOutputControl()
+        {
+            var grid = new Grid();
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+            var image = new Image
+            {
+                Stretch = Stretch.Uniform,
+                Margin = new Thickness(5)
+            };
+
+            try
+            {
+                var bitmap = new BitmapImage(new Uri("pack://application:,,,/Resources/alarm_output_icon.png"));
+                image.Source = bitmap;
+                grid.Children.Add(image);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"載入警報輸出圖片失敗: {ex.Message}");
+                var iconText = new TextBlock
+                {
+                    Text = "🚨",
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    FontSize = 20
+                };
+                grid.Children.Add(iconText);
+            }
+
+            DeviceBorder.Child = grid;
+        }
+
+        // ✅ 其他設備類型的控件
+        private void CreateDefaultControl()
+        {
+            var stackPanel = new StackPanel
+            {
+                Orientation = Orientation.Vertical,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            var iconText = new TextBlock
+            {
+                Text = Device.TypeIcon,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                FontSize = 14
+            };
+
+            stackPanel.Children.Add(iconText);
+            DeviceBorder.Child = stackPanel;
         }
 
         private void CreateResizeHandles()
@@ -551,13 +639,15 @@ namespace SentryX
         {
             Device.IsOnline = isOnline;
 
-            // ✅ 只有非視頻通道才更新背景色
-            if (Device.DeviceType != "Channel")
+            // ✅ 修改：視頻通道、警報輸入、警報輸出都不顯示背景色
+            if (Device.DeviceType != "Channel" &&
+                Device.DeviceType != "AlarmIn" &&
+                Device.DeviceType != "AlarmOut")
             {
                 var bgColor = isOnline ? Colors.LightGreen : Colors.LightCoral;
                 DeviceBorder.Background = new SolidColorBrush(bgColor);
             }
-            // ✅ 視頻通道保持透明，不改變背景
+            // 如果是這三種類型，保持透明背景
         }
 
         private Cursor GetCursorForHandle(ResizeHandle handle)
@@ -1121,11 +1211,11 @@ namespace SentryX
 
             Canvas.SetLeft(deviceControl, x);
             Canvas.SetTop(deviceControl, y);
-            Panel.SetZIndex(deviceControl, 1); // ✅ 設備在視野下方
+            Panel.SetZIndex(deviceControl, 1);
             MapCanvas.Children.Add(deviceControl);
 
-            // ✅ 為設備創建視野
-            if (device.DeviceId != null)
+            // ✅ 修改：只為視頻通道創建視野
+            if (device.DeviceId != null && device.DeviceType == "Channel")
             {
                 fieldOfViewManager?.CreateFieldOfView(device);
             }
@@ -1213,8 +1303,8 @@ namespace SentryX
             var existingDevices = MapCanvas.Children.OfType<DeviceControl>().ToList();
             foreach (var dev in existingDevices)
             {
-                // ✅ 移除視野
-                if (dev.Device?.DeviceId != null)
+                // ✅ 修改：只移除視頻通道的視野
+                if (dev.Device?.DeviceId != null && dev.Device.DeviceType == "Channel")
                     fieldOfViewManager?.RemoveFieldOfView(dev.Device.DeviceId);
 
                 MapCanvas.Children.Remove(dev);
@@ -1867,8 +1957,8 @@ namespace SentryX
                             Panel.SetZIndex(deviceControl, 1);
                             MapCanvas.Children.Add(deviceControl);
 
-                            // ✅ 創建視野
-                            if (device.DeviceId != null)
+                            // ✅ 修改：只為視頻通道創建視野
+                            if (device.DeviceId != null && device.DeviceType == "Channel")
                                 fieldOfViewManager?.CreateFieldOfView(device);
                         }
                     }
@@ -2021,11 +2111,17 @@ namespace SentryX
                 DeviceWidthTextBox.Text = selectedControl.Device.Width.ToString("F0");
                 DeviceHeightTextBox.Text = selectedControl.Device.Height.ToString("F0");
 
-                // 視野設置
-                ShowFieldOfViewCheckBox.IsChecked = selectedControl.Device.ShowFieldOfView;
-                ViewAngleTextBox.Text = selectedControl.Device.ViewAngle.ToString("F0");
-                ViewDistanceTextBox.Text = selectedControl.Device.ViewDistance.ToString("F0");
-                ViewDirectionTextBox.Text = selectedControl.Device.ViewDirection.ToString("F0");
+                // ✅ 根據設備類型控制視野設置面板的可見性
+                bool isChannel = selectedControl.Device.DeviceType == "Channel";
+                FieldOfViewSettingsPanel.Visibility = isChannel ? Visibility.Visible : Visibility.Collapsed;
+
+                if (isChannel)
+                {
+                    ShowFieldOfViewCheckBox.IsChecked = selectedControl.Device.ShowFieldOfView;
+                    ViewAngleTextBox.Text = selectedControl.Device.ViewAngle.ToString("F0");
+                    ViewDistanceTextBox.Text = selectedControl.Device.ViewDistance.ToString("F0");
+                    ViewDirectionTextBox.Text = selectedControl.Device.ViewDirection.ToString("F0");
+                }
 
                 isUpdatingProperties = false;
             }
@@ -2040,10 +2136,8 @@ namespace SentryX
                 DeviceWidthTextBox.Text = "60";
                 DeviceHeightTextBox.Text = "60";
 
-                ShowFieldOfViewCheckBox.IsChecked = true;
-                ViewAngleTextBox.Text = "90";
-                ViewDistanceTextBox.Text = "100";
-                ViewDirectionTextBox.Text = "0";
+                // ✅ 隱藏視野設置面板
+                FieldOfViewSettingsPanel.Visibility = Visibility.Collapsed;
             }
         }
 

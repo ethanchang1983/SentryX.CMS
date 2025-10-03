@@ -21,6 +21,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <None Remove="Resources\alarm_input_icon.png" />
     <None Remove="Resources\camera_icon.png" />
   </ItemGroup>
 
@@ -37,6 +38,7 @@
 
 
   <ItemGroup>
+    <Resource Include="Resources\alarm_input_icon.png" />
     <Resource Include="Resources\camera_icon.png" />
   </ItemGroup>
 

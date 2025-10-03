@@ -14,6 +14,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using System.Xml.Serialization;
+using static SentryX.DeviceControl;
 // === 解決命名空間衝突的 using alias ===
 using Brushes = System.Windows.Media.Brushes;
 using Color = System.Windows.Media.Color;
@@ -23,13 +24,17 @@ using DragDropEffects = System.Windows.DragDropEffects;
 using DragEventArgs = System.Windows.DragEventArgs;
 using HorizontalAlignment = System.Windows.HorizontalAlignment;
 using Image = System.Windows.Controls.Image;
+// 注意：改用 IOPath 來代表 System.IO.Path，避免與 WPF 的 Path 類型衝突
+using IOPath = System.IO.Path;
 using MessageBox = System.Windows.MessageBox;
 using MouseEventArgs = System.Windows.Input.MouseEventArgs;
 using OpenFileDialog = Microsoft.Win32.OpenFileDialog;
 using Orientation = System.Windows.Controls.Orientation;
-using Path = System.IO.Path;
 using Point = System.Windows.Point;
+using ShapesPath = System.Windows.Shapes.Path;
 using VerticalAlignment = System.Windows.VerticalAlignment;
+using Size = System.Windows.Size;
+using Panel = System.Windows.Controls.Panel;
 
 
 namespace SentryX
@@ -45,6 +50,12 @@ namespace SentryX
         public double Y { get; set; }
         public double Width { get; set; } = 40;
         public double Height { get; set; } = 40;
+
+        // 新增：攝影機視野屬性
+        public bool ShowFieldOfView { get; set; } = true; // 是否顯示視野
+        public double ViewAngle { get; set; } = 90; // 視野角度（度）
+        public double ViewDistance { get; set; } = 100; // 視野距離（像素）
+        public double ViewDirection { get; set; } = 0; // 視野方向（度，0為正上方，順時針）
 
         public string? DeviceId { get; set; }
         public int ChannelCount { get; set; } = 0;
@@ -66,15 +77,299 @@ namespace SentryX
     public enum ResizeHandle
     {
         None,
-        TopLeft,
-        TopRight,
-        BottomLeft,
-        BottomRight,
-        Top,
-        Bottom,
-        Left,
-        Right
+
+        // 角點 (Corners)
+        TopLeft,      // 左上
+        TopRight,     // 右上
+        BottomLeft,   // 左下
+        BottomRight,  // 右下
+
+        // 邊中點 (Middles)
+        Top,          // 上
+        Bottom,       // 下
+        Left,         // 左
+        Right         // 右
     }
+
+    // FieldOfViewManager - 管理所有設備的視野繪製
+    public class FieldOfViewManager
+    {
+        private Canvas fieldOfViewCanvas;
+        private Canvas handlesCanvas;
+        private Dictionary<string, FieldOfViewElements> fieldOfViews;
+
+        public FieldOfViewManager(Canvas fovCanvas, Canvas handleCanvas)
+        {
+            fieldOfViewCanvas = fovCanvas;
+            handlesCanvas = handleCanvas;
+            fieldOfViews = new Dictionary<string, FieldOfViewElements>();
+        }
+
+        // 視野元素容器
+        private class FieldOfViewElements
+        {
+            public ShapesPath? FieldPath { get; set; }
+            public Line? DirectionLine { get; set; }
+            public Ellipse? DirectionHandle { get; set; }
+            public Ellipse? LeftAngleHandle { get; set; }
+            public Ellipse? RightAngleHandle { get; set; }
+            public bool IsVisible { get; set; }
+        }
+
+        // 為設備創建視野
+        public void CreateFieldOfView(MapDevice device)
+        {
+            if (device.DeviceId == null) return;
+
+            var elements = new FieldOfViewElements
+            {
+                IsVisible = device.ShowFieldOfView
+            };
+
+            // 創建視野扇形
+            elements.FieldPath = new ShapesPath
+            {
+                Fill = new SolidColorBrush(Color.FromArgb(30, 0, 150, 255)),
+                Stroke = Brushes.DodgerBlue,
+                StrokeThickness = 1,
+                Visibility = device.ShowFieldOfView ? Visibility.Visible : Visibility.Collapsed
+            };
+            fieldOfViewCanvas.Children.Add(elements.FieldPath);
+
+            // 創建方向線
+            elements.DirectionLine = new Line
+            {
+                Stroke = Brushes.Red,
+                StrokeThickness = 2,
+                Visibility = Visibility.Collapsed
+            };
+            handlesCanvas.Children.Add(elements.DirectionLine);
+
+            // 創建方向控制點（紅色）
+            elements.DirectionHandle = new Ellipse
+            {
+                Width = 10,
+                Height = 10,
+                Fill = Brushes.Red,
+                Stroke = Brushes.White,
+                StrokeThickness = 2,
+                Visibility = Visibility.Collapsed,
+                Cursor = Cursors.Hand,
+                Tag = $"Direction_{device.DeviceId}",
+                IsHitTestVisible = true  // ✅ 明確設置
+            };
+            handlesCanvas.Children.Add(elements.DirectionHandle);
+
+            // 創建左側角度控制點（橙色）
+            elements.LeftAngleHandle = new Ellipse
+            {
+                Width = 8,
+                Height = 8,
+                Fill = Brushes.Orange,
+                Stroke = Brushes.White,
+                StrokeThickness = 2,
+                Visibility = Visibility.Collapsed,
+                Cursor = Cursors.SizeAll,
+                Tag = $"LeftAngle_{device.DeviceId}",
+                IsHitTestVisible = true  // ✅ 明確設置
+            };
+            handlesCanvas.Children.Add(elements.LeftAngleHandle);
+
+            // 創建右側角度控制點（橙色）
+            elements.RightAngleHandle = new Ellipse
+            {
+                Width = 8,
+                Height = 8,
+                Fill = Brushes.Orange,
+                Stroke = Brushes.White,
+                StrokeThickness = 2,
+                Visibility = Visibility.Collapsed,
+                Cursor = Cursors.SizeAll,
+                Tag = $"RightAngle_{device.DeviceId}",
+                IsHitTestVisible = true  // ✅ 明確設置
+            };
+            handlesCanvas.Children.Add(elements.RightAngleHandle);
+
+            fieldOfViews[device.DeviceId] = elements;
+            UpdateFieldOfView(device);
+        }
+
+        // 更新視野顯示
+        public void UpdateFieldOfView(MapDevice device)
+        {
+            if (device.DeviceId == null || !fieldOfViews.ContainsKey(device.DeviceId))
+                return;
+
+            var elements = fieldOfViews[device.DeviceId];
+            if (elements.FieldPath == null) return;
+
+            // 計算設備中心點（Canvas 座標）
+            double centerX = device.X + device.Width / 2;
+            double centerY = device.Y + device.Height / 2;
+
+            // 轉換角度為弧度
+            double directionRad = device.ViewDirection * Math.PI / 180;
+            double halfAngleRad = (device.ViewAngle / 2) * Math.PI / 180;
+
+            // 計算扇形的起始和結束角度
+            double startAngle = directionRad - halfAngleRad;
+            double endAngle = directionRad + halfAngleRad;
+
+            // 計算扇形邊緣的兩個點
+            double x1 = centerX + device.ViewDistance * Math.Sin(startAngle);
+            double y1 = centerY - device.ViewDistance * Math.Cos(startAngle);
+            double x2 = centerX + device.ViewDistance * Math.Sin(endAngle);
+            double y2 = centerY - device.ViewDistance * Math.Cos(endAngle);
+
+            // 創建扇形路徑
+            var geometry = new PathGeometry();
+            var figure = new PathFigure { StartPoint = new Point(centerX, centerY) };
+
+            figure.Segments.Add(new LineSegment(new Point(x1, y1), true));
+            figure.Segments.Add(new ArcSegment(
+                new Point(x2, y2),
+                new Size(device.ViewDistance, device.ViewDistance),
+                0,
+                device.ViewAngle > 180,
+                SweepDirection.Clockwise,
+                true
+            ));
+            figure.Segments.Add(new LineSegment(new Point(centerX, centerY), true));
+
+            geometry.Figures.Add(figure);
+            elements.FieldPath.Data = geometry;
+
+            // 更新方向線
+            if (elements.DirectionLine != null)
+            {
+                elements.DirectionLine.X1 = centerX;
+                elements.DirectionLine.Y1 = centerY;
+                elements.DirectionLine.X2 = centerX + device.ViewDistance * Math.Sin(directionRad);
+                elements.DirectionLine.Y2 = centerY - device.ViewDistance * Math.Cos(directionRad);
+            }
+
+            // 更新控制點位置
+            if (elements.DirectionHandle != null)
+            {
+                double dirX = centerX + device.ViewDistance * Math.Sin(directionRad);
+                double dirY = centerY - device.ViewDistance * Math.Cos(directionRad);
+                Canvas.SetLeft(elements.DirectionHandle, dirX - 5);
+                Canvas.SetTop(elements.DirectionHandle, dirY - 5);
+            }
+
+            if (elements.LeftAngleHandle != null)
+            {
+                Canvas.SetLeft(elements.LeftAngleHandle, x1 - 4);
+                Canvas.SetTop(elements.LeftAngleHandle, y1 - 4);
+            }
+
+            if (elements.RightAngleHandle != null)
+            {
+                Canvas.SetLeft(elements.RightAngleHandle, x2 - 4);
+                Canvas.SetTop(elements.RightAngleHandle, y2 - 4);
+            }
+        }
+
+        // 顯示/隱藏選擇狀態
+        public void ShowSelection(string deviceId)
+        {
+            if (!fieldOfViews.ContainsKey(deviceId)) return;
+            var elements = fieldOfViews[deviceId];
+
+            if (elements.DirectionHandle != null)
+            {
+                elements.DirectionHandle.Visibility = Visibility.Visible;
+                Panel.SetZIndex(elements.DirectionHandle, 1000); // ✅ 確保在最上層
+                Debug.WriteLine($"✅ 顯示方向控制點: {deviceId}");
+            }
+            if (elements.LeftAngleHandle != null)
+            {
+                elements.LeftAngleHandle.Visibility = Visibility.Visible;
+                Panel.SetZIndex(elements.LeftAngleHandle, 1000);
+                Debug.WriteLine($"✅ 顯示左角控制點: {deviceId}");
+            }
+            if (elements.RightAngleHandle != null)
+            {
+                elements.RightAngleHandle.Visibility = Visibility.Visible;
+                Panel.SetZIndex(elements.RightAngleHandle, 1000);
+                Debug.WriteLine($"✅ 顯示右角控制點: {deviceId}");
+            }
+            if (elements.DirectionLine != null)
+            {
+                elements.DirectionLine.Visibility = Visibility.Visible;
+                Debug.WriteLine($"✅ 顯示方向線: {deviceId}");
+            }
+        }
+
+        public void HideSelection(string deviceId)
+        {
+            if (!fieldOfViews.ContainsKey(deviceId)) return;
+            var elements = fieldOfViews[deviceId];
+
+            if (elements.DirectionHandle != null) elements.DirectionHandle.Visibility = Visibility.Collapsed;
+            if (elements.LeftAngleHandle != null) elements.LeftAngleHandle.Visibility = Visibility.Collapsed;
+            if (elements.RightAngleHandle != null) elements.RightAngleHandle.Visibility = Visibility.Collapsed;
+            if (elements.DirectionLine != null) elements.DirectionLine.Visibility = Visibility.Collapsed;
+        }
+
+        // 切換視野顯示
+        public void ToggleFieldOfView(string deviceId, bool show)
+        {
+            if (!fieldOfViews.ContainsKey(deviceId)) return;
+            var elements = fieldOfViews[deviceId];
+
+            if (elements.FieldPath != null)
+                elements.FieldPath.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+
+            elements.IsVisible = show;
+        }
+
+        // 移除視野
+        public void RemoveFieldOfView(string deviceId)
+        {
+            if (!fieldOfViews.ContainsKey(deviceId)) return;
+            var elements = fieldOfViews[deviceId];
+
+            if (elements.FieldPath != null) fieldOfViewCanvas.Children.Remove(elements.FieldPath);
+            if (elements.DirectionLine != null) handlesCanvas.Children.Remove(elements.DirectionLine);
+            if (elements.DirectionHandle != null) handlesCanvas.Children.Remove(elements.DirectionHandle);
+            if (elements.LeftAngleHandle != null) handlesCanvas.Children.Remove(elements.LeftAngleHandle);
+            if (elements.RightAngleHandle != null) handlesCanvas.Children.Remove(elements.RightAngleHandle);
+
+            fieldOfViews.Remove(deviceId);
+        }
+
+        // 檢測點擊的控制點
+        public (string? deviceId, string? handleType) GetHandleAt(Point point)
+        {
+            Debug.WriteLine($"🔍 檢查點擊位置: ({point.X:F0}, {point.Y:F0})");
+
+            foreach (var element in handlesCanvas.Children.OfType<Ellipse>())
+            {
+                if (element.Visibility != Visibility.Visible) continue;
+
+                var left = Canvas.GetLeft(element);
+                var top = Canvas.GetTop(element);
+                var bounds = new Rect(left - 5, top - 5, element.Width + 10, element.Height + 10);
+
+                Debug.WriteLine($"   控制點: Tag={element.Tag}, Bounds=({bounds.Left:F0},{bounds.Top:F0},{bounds.Right:F0},{bounds.Bottom:F0})");
+
+                if (bounds.Contains(point) && element.Tag is string tag)
+                {
+                    var parts = tag.Split('_');
+                    if (parts.Length == 2)
+                    {
+                        Debug.WriteLine($"✅ 找到控制點: {parts[0]} of {parts[1]}");
+                        return (parts[1], parts[0]); // (deviceId, handleType)
+                    }
+                }
+            }
+
+            Debug.WriteLine("❌ 未找到控制點");
+            return (null, null);
+        }
+    }
+
 
     // DeviceControl - 自訂的設備控件類別
     public class DeviceControl : Grid
@@ -82,8 +377,11 @@ namespace SentryX
         public MapDevice Device { get; set; }
         public Border DeviceBorder { get; private set; }
         public Border SelectionBorder { get; private set; }
+        public Canvas HandleContainer { get; private set; } = null!; // 加上 null-forgiving 運算子
         public List<Ellipse> ResizeHandles { get; private set; }
+
         public bool IsSelected { get; set; }
+
 
         public DeviceControl(MapDevice device)
         {
@@ -91,51 +389,115 @@ namespace SentryX
             ResizeHandles = new List<Ellipse>();
             DeviceBorder = new Border();
             SelectionBorder = new Border();
+
             CreateControl();
+            // ❌ 移除 CreateFieldOfView() 調用
+        }
+
+        protected override System.Windows.Size MeasureOverride(System.Windows.Size constraint)
+        {
+            DeviceBorder.Measure(constraint);
+            SelectionBorder.Measure(constraint);
+            HandleContainer.Measure(constraint);
+
+            foreach (var handle in ResizeHandles)
+            {
+                handle.Measure(constraint);
+            }
+
+            return new System.Windows.Size(Device.Width, Device.Height);
+        }
+
+        protected override System.Windows.Size ArrangeOverride(System.Windows.Size arrangeBounds)
+        {
+            var deviceRect = new Rect(0, 0, Device.Width, Device.Height);
+
+            DeviceBorder.Arrange(deviceRect);
+            SelectionBorder.Arrange(new Rect(-5, -5, Device.Width + 10, Device.Height + 10));
+            HandleContainer.Arrange(new Rect(-5, -5, Device.Width + 10, Device.Height + 10));
+
+            // ✅ 移除文字排列邏輯
+
+            foreach (var handle in ResizeHandles)
+            {
+                handle.Arrange(new Rect(Canvas.GetLeft(handle), Canvas.GetTop(handle), handle.Width, handle.Height));
+            }
+
+            return new System.Windows.Size(Device.Width, Device.Height);
         }
 
         private void CreateControl()
         {
-            var bgColor = Device.IsOnline ? Colors.LightGreen : Colors.LightCoral;
+            this.ClipToBounds = false;
 
             DeviceBorder = new Border
             {
                 Width = Device.Width,
                 Height = Device.Height,
-                Background = new SolidColorBrush(bgColor),
-                BorderBrush = Brushes.Black,
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(5)
+                Background = Brushes.Transparent,
+                BorderBrush = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                ClipToBounds = false,
+                // ✅ 添加 ToolTip
+                ToolTip = Device.Name
             };
 
-            var stackPanel = new StackPanel
+            if (Device.DeviceType == "Channel")
             {
-                Orientation = Orientation.Vertical,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center
-            };
+                var grid = new Grid();
+                grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
-            var iconText = new TextBlock
+                var image = new Image
+                {
+                    Stretch = Stretch.Uniform,
+                    Margin = new Thickness(5)
+                };
+
+                try
+                {
+                    var bitmap = new BitmapImage(new Uri("pack://application:,,,/Resources/camera_icon.png"));
+                    image.Source = bitmap;
+                    grid.Children.Add(image);
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"載入圖片失敗: {ex.Message}");
+                    var iconText = new TextBlock
+                    {
+                        Text = "📹",
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        VerticalAlignment = VerticalAlignment.Center,
+                        FontSize = 20
+                    };
+                    grid.Children.Add(iconText);
+                }
+
+                DeviceBorder.Child = grid;
+            }
+            else
             {
-                Text = Device.TypeIcon,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                FontSize = 14
-            };
+                var stackPanel = new StackPanel
+                {
+                    Orientation = Orientation.Vertical,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
 
-            var nameText = new TextBlock
-            {
-                Text = Device.Name,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                TextTrimming = TextTrimming.CharacterEllipsis,
-                FontSize = 10,
-                MaxWidth = Device.Width - 4
-            };
+                var iconText = new TextBlock
+                {
+                    Text = Device.TypeIcon,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    FontSize = 14
+                };
 
-            stackPanel.Children.Add(iconText);
-            stackPanel.Children.Add(nameText);
+                stackPanel.Children.Add(iconText);
+                DeviceBorder.Child = stackPanel;
+            }
 
-            DeviceBorder.Child = stackPanel;
             this.Children.Add(DeviceBorder);
+
+            // ✅ 不再需要文字元素，移除這部分
+            // var nameText = new TextBlock ...
 
             SelectionBorder = new Border
             {
@@ -146,6 +508,15 @@ namespace SentryX
                 Margin = new Thickness(-5)
             };
             this.Children.Add(SelectionBorder);
+
+            HandleContainer = new Canvas
+            {
+                Width = Device.Width + 10,
+                Height = Device.Height + 10,
+                Margin = new Thickness(-5),
+                IsHitTestVisible = true
+            };
+            this.Children.Add(HandleContainer);
 
             CreateResizeHandles();
         }
@@ -170,15 +541,23 @@ namespace SentryX
                 };
 
                 ResizeHandles.Add(handle);
-                this.Children.Add(handle);
+                // this.Children.Add(handle);
+                HandleContainer.Children.Add(handle);
             }
         }
+
 
         public void UpdateDeviceStatus(bool isOnline)
         {
             Device.IsOnline = isOnline;
-            var bgColor = isOnline ? Colors.LightGreen : Colors.LightCoral;
-            DeviceBorder.Background = new SolidColorBrush(bgColor);
+
+            // ✅ 只有非視頻通道才更新背景色
+            if (Device.DeviceType != "Channel")
+            {
+                var bgColor = isOnline ? Colors.LightGreen : Colors.LightCoral;
+                DeviceBorder.Background = new SolidColorBrush(bgColor);
+            }
+            // ✅ 視頻通道保持透明，不改變背景
         }
 
         private Cursor GetCursorForHandle(ResizeHandle handle)
@@ -199,10 +578,13 @@ namespace SentryX
             SelectionBorder.Visibility = Visibility.Visible;
             SelectionBorder.Width = DeviceBorder.Width + 10;
             SelectionBorder.Height = DeviceBorder.Height + 10;
+
             PositionResizeHandles();
+
             foreach (var handle in ResizeHandles)
             {
                 handle.Visibility = Visibility.Visible;
+                Panel.SetZIndex(handle, 100); // ✅ 確保控制點在最上層
             }
         }
 
@@ -214,25 +596,44 @@ namespace SentryX
             {
                 handle.Visibility = Visibility.Collapsed;
             }
+            // ✅ 不要在這裡處理視野控制點，由 FieldOfViewManager 處理
         }
+
 
         private void PositionResizeHandles()
         {
             double w = DeviceBorder.Width;
             double h = DeviceBorder.Height;
-            double hw = 4;
+            double handleSize = 8; // 修正：補上 handleSize 定義
+            double hw = 4; // 控制點半徑 (handleSize / 2)
 
             if (ResizeHandles.Count >= 8)
             {
-                SetHandlePosition(ResizeHandles[0], -hw - 5, -hw - 5);
-                SetHandlePosition(ResizeHandles[1], w - hw + 5, -hw - 5);
-                SetHandlePosition(ResizeHandles[2], -hw - 5, h - hw + 5);
-                SetHandlePosition(ResizeHandles[3], w - hw + 5, h - hw + 5);
-                SetHandlePosition(ResizeHandles[4], w / 2 - hw, -hw - 5);
-                SetHandlePosition(ResizeHandles[5], w / 2 - hw, h - hw + 5);
-                SetHandlePosition(ResizeHandles[6], -hw - 5, h / 2 - hw);
-                SetHandlePosition(ResizeHandles[7], w - hw + 5, h / 2 - hw);
+                double fullW = w + 10;
+                double fullH = h + 10;
+
+                // 四個角點 (Corners)
+                SetCanvasPosition(ResizeHandles[0], 0, 0);                  // 左上
+                SetCanvasPosition(ResizeHandles[1], fullW - handleSize, 0);  // 右上
+                SetCanvasPosition(ResizeHandles[2], 0, fullH - handleSize);  // 左下
+                SetCanvasPosition(ResizeHandles[3], fullW - handleSize, fullH - handleSize); // 右下
+
+                // 四個邊中點 (Middles)
+                SetCanvasPosition(ResizeHandles[4], fullW / 2 - hw, 0);                   // 上中
+                SetCanvasPosition(ResizeHandles[5], fullW / 2 - hw, fullH - handleSize);  // 下中
+                SetCanvasPosition(ResizeHandles[6], 0, fullH / 2 - hw);                   // 左中
+                SetCanvasPosition(ResizeHandles[7], fullW - handleSize, fullH / 2 - hw);  // 右中
+
+                HandleContainer.Width = fullW;
+                HandleContainer.Height = fullH;
             }
+        }
+
+        // ✅ 新增輔助方法，使用 Canvas.Left 和 Canvas.Top
+        private void SetCanvasPosition(Ellipse handle, double left, double top)
+        {
+            Canvas.SetLeft(handle, left);
+            Canvas.SetTop(handle, top);
         }
 
         private void SetHandlePosition(Ellipse handle, double left, double top)
@@ -256,30 +657,89 @@ namespace SentryX
             {
                 SelectionBorder.Width = width + 10;
                 SelectionBorder.Height = height + 10;
+
+                // ✅ 確保 HandleContainer 尺寸同步
+                HandleContainer.Width = width + 10;
+                HandleContainer.Height = height + 10;
+
                 PositionResizeHandles();
             }
         }
 
-        public ResizeHandle GetHandleAt(Point point)
+        public ResizeHandle GetHandleAt(Point localPoint)
         {
-            for (int i = 0; i < ResizeHandles.Count; i++)
-            {
-                var handle = ResizeHandles[i];
-                if (handle.Visibility == Visibility.Visible)
-                {
-                    var handleBounds = new Rect(
-                        handle.Margin.Left - 2,
-                        handle.Margin.Top - 2,
-                        handle.Width + 4,
-                        handle.Height + 4
-                    );
+            // 假設控制點的範圍為一個小的正方形 (例如 10x10 像素)
+            double handleSize = 10;
 
-                    if (handleBounds.Contains(point))
-                    {
-                        return (ResizeHandle)(i + 1);
-                    }
-                }
+            // 獲取設備的當前尺寸
+            double width = this.Device.Width;
+            double height = this.Device.Height;
+
+            // 邊界距離 (半徑)
+            double halfSize = handleSize / 2;
+
+            // 1. 檢查四個角點 (Corners)
+
+            // 左上 (TopLeft)
+            if (localPoint.X >= -halfSize && localPoint.X <= halfSize &&
+                localPoint.Y >= -halfSize && localPoint.Y <= halfSize)
+            {
+                return ResizeHandle.TopLeft;
             }
+
+            // 右上 (TopRight)
+            if (localPoint.X >= width - halfSize && localPoint.X <= width + halfSize &&
+                localPoint.Y >= -halfSize && localPoint.Y <= halfSize)
+            {
+                return ResizeHandle.TopRight;
+            }
+
+            // 左下 (BottomLeft)
+            // ⚠️ 注意：這裡需要判斷 Y 軸的絕對位置，假設 Y=0 是 DeviceControl 的頂部
+            if (localPoint.X >= -halfSize && localPoint.X <= halfSize &&
+                localPoint.Y >= height - halfSize && localPoint.Y <= height + halfSize)
+            {
+                return ResizeHandle.BottomLeft;
+            }
+
+            // 右下 (BottomRight)
+            if (localPoint.X >= width - halfSize && localPoint.X <= width + halfSize &&
+                localPoint.Y >= height - halfSize && localPoint.Y <= height + halfSize)
+            {
+                return ResizeHandle.BottomRight;
+            }
+
+            // 2. 檢查四個邊中點 (Middles)
+
+            // 上 (Top) (X 軸在中間，Y 軸在頂部邊緣)
+            if (localPoint.X >= width / 2 - halfSize && localPoint.X <= width / 2 + halfSize &&
+                localPoint.Y >= -halfSize && localPoint.Y <= halfSize)
+            {
+                return ResizeHandle.Top;
+            }
+
+            // 下 (Bottom)
+            if (localPoint.X >= width / 2 - halfSize && localPoint.X <= width / 2 + halfSize &&
+                localPoint.Y >= height - halfSize && localPoint.Y <= height + halfSize)
+            {
+                return ResizeHandle.Bottom;
+            }
+
+            // 左 (Left)
+            if (localPoint.X >= -halfSize && localPoint.X <= halfSize &&
+                localPoint.Y >= height / 2 - halfSize && localPoint.Y <= height / 2 + halfSize)
+            {
+                return ResizeHandle.Left;
+            }
+
+            // 右 (Right)
+            if (localPoint.X >= width - halfSize && localPoint.X <= width + halfSize &&
+                localPoint.Y >= height / 2 - halfSize && localPoint.Y <= height / 2 + halfSize)
+            {
+                return ResizeHandle.Right;
+            }
+
+            // 如果都沒有命中，返回 None
             return ResizeHandle.None;
         }
     }
@@ -342,12 +802,26 @@ namespace SentryX
         private const double MIN_ZOOM = 0.2;
         private DispatcherTimer? _refreshTimer;
 
-        private string mapDataFolder = Path.Combine(Directory.GetCurrentDirectory(), "MapData");
-        private string configFilePath => Path.Combine(mapDataFolder, "config.xml");
+        // ✅ 新增：視野管理器
+        private FieldOfViewManager? fieldOfViewManager;
+
+        // 視野調整相關欄位
+        private bool isAdjustingFieldOfView = false;
+        private string? activeFieldOfViewHandleType = null; // "Direction", "LeftAngle", "RightAngle"
+        private string? activeFieldOfViewDeviceId = null;
+
+        private string mapDataFolder = IOPath.Combine(Directory.GetCurrentDirectory(), "MapData");
+        private string configFilePath => IOPath.Combine(mapDataFolder, "config.xml");
+
+        private bool isUpdatingProperties = false;
 
         public MapEditorWindow()
         {
             InitializeComponent();
+
+            // ✅ 初始化視野管理器
+            fieldOfViewManager = new FieldOfViewManager(FieldOfViewCanvas, FieldOfViewHandlesCanvas);
+
             InitializeRealDeviceList();
             UpdateButtonStates();
             EnsureMapImageExists();
@@ -466,8 +940,8 @@ namespace SentryX
                             {
                                 Name = $"    └─ {statusIcon} {alarmName} (IN{i})",
                                 IP = device.IpAddress,
-                                Port = device.Port,
-                                IsOnline = device.IsOnline,
+                                Port = 0,
+                                IsOnline = false,
                                 DeviceId = $"{device.Id}_IN{i}",
                                 DeviceType = "AlarmIn",
                                 Width = 45,
@@ -504,8 +978,8 @@ namespace SentryX
                             {
                                 Name = $"    └─ {statusIcon} {alarmName} (OUT{i})",
                                 IP = device.IpAddress,
-                                Port = device.Port,
-                                IsOnline = device.IsOnline,
+                                Port = 0,
+                                IsOnline = false,
                                 DeviceId = $"{device.Id}_OUT{i}",
                                 DeviceType = "AlarmOut",
                                 Width = 45,
@@ -647,7 +1121,14 @@ namespace SentryX
 
             Canvas.SetLeft(deviceControl, x);
             Canvas.SetTop(deviceControl, y);
+            Panel.SetZIndex(deviceControl, 1); // ✅ 設備在視野下方
             MapCanvas.Children.Add(deviceControl);
+
+            // ✅ 為設備創建視野
+            if (device.DeviceId != null)
+            {
+                fieldOfViewManager?.CreateFieldOfView(device);
+            }
 
             DeviceCountText.Text = $"設備數量: {MapCanvas.Children.OfType<DeviceControl>().Count()}";
             UpdateLayersList();
@@ -709,8 +1190,8 @@ namespace SentryX
                 try
                 {
                     string originalFilePath = openFileDialog.FileName;
-                    string fileName = Path.GetFileName(originalFilePath);
-                    string newFilePath = Path.Combine(mapDataFolder, fileName);
+                    string fileName = IOPath.GetFileName(originalFilePath);
+                    string newFilePath = IOPath.Combine(mapDataFolder, fileName);
 
                     File.Copy(originalFilePath, newFilePath, true);
 
@@ -732,6 +1213,10 @@ namespace SentryX
             var existingDevices = MapCanvas.Children.OfType<DeviceControl>().ToList();
             foreach (var dev in existingDevices)
             {
+                // ✅ 移除視野
+                if (dev.Device?.DeviceId != null)
+                    fieldOfViewManager?.RemoveFieldOfView(dev.Device.DeviceId);
+
                 MapCanvas.Children.Remove(dev);
             }
 
@@ -752,6 +1237,7 @@ namespace SentryX
             {
                 selectedControl.HideSelection();
                 selectedControl = null;
+                UpdateDevicePropertiesPanel(); // 切換模式時更新面板
             }
 
             UpdateButtonStates();
@@ -761,8 +1247,13 @@ namespace SentryX
         {
             if (selectedControl != null)
             {
+                // ✅ 移除視野
+                if (selectedControl.Device.DeviceId != null)
+                    fieldOfViewManager?.RemoveFieldOfView(selectedControl.Device.DeviceId);
+
                 MapCanvas.Children.Remove(selectedControl);
                 selectedControl = null;
+                UpdateDevicePropertiesPanel();
                 DeviceCountText.Text = $"設備數量: {MapCanvas.Children.OfType<DeviceControl>().Count()}";
                 UpdateButtonStates();
                 UpdateLayersList();
@@ -816,12 +1307,53 @@ namespace SentryX
 
         private void MapCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
-            var point = e.GetPosition(MapCanvas);
-            var hitElement = MapCanvas.InputHitTest(point) as FrameworkElement;
+            // 1. 基本檢查和初始化
+            if (e.LeftButton != MouseButtonState.Pressed) return; // 只處理左鍵按下
 
+            Point point = e.GetPosition(MapCanvas);
+            FrameworkElement? hitElement = e.OriginalSource as FrameworkElement;
+
+            // ==========================================================
+            // ✅ 步驟一：處理視野控制點的點擊 (優先處理，解決點擊後失去點擊狀態的問題)
+            // ==========================================================
+            if (hitElement is Ellipse handle && handle.Tag is string tag)
+            {
+                // 假設 Tag 格式為 "HandleType_DeviceId..."
+                // 例如: "DIR_192.168.31.137:37777_CH1"，split 後會有 3 個 parts
+                var parts = tag.Split('_');
+
+                if (parts.Length >= 2)
+                {
+                    var handleType = parts[0];
+                    // 重新組合 DeviceId (將第一個底線後的所有部分都視為 DeviceId)
+                    var deviceId = string.Join("_", parts.Skip(1));
+
+                    // 必須在編輯模式下且選中的設備要匹配
+                    if (isEditMode && selectedControl != null && selectedControl.Device.DeviceId == deviceId)
+                    {
+                        Debug.WriteLine($"✅ 找到視野控制點: {handleType} of {deviceId}");
+
+                        isAdjustingFieldOfView = true;
+                        activeFieldOfViewHandleType = handleType; // 這裡假設您有 FieldOfViewManager.FieldOfViewHandleType
+                        activeFieldOfViewDeviceId = deviceId;
+                        dragStartPoint = point; // 確保設置拖曳起始點，用於 MouseMove
+
+                        // 💥 關鍵修正：標記事件為已處理，阻止事件冒泡到 MapCanvas 的取消選中邏輯
+                        e.Handled = true;
+
+                        MapCanvas.CaptureMouse();
+                        return; // 處理完畢，立即退出方法
+                    }
+                }
+            }
+
+            // ==========================================================
+            // 步驟二：查找被點擊的 DeviceControl (用於拖曭、縮放、選中)
+            // ==========================================================
             DeviceControl? clickedControl = null;
             FrameworkElement? current = hitElement;
 
+            // 向上遍歷視覺樹查找 DeviceControl
             while (current != null && current != MapCanvas)
             {
                 if (current is DeviceControl dc)
@@ -829,12 +1361,15 @@ namespace SentryX
                     clickedControl = dc;
                     break;
                 }
-                current = current.Parent as FrameworkElement;
+                // 使用 VisualTreeHelper.GetParent 更安全地查找父元素
+                current = VisualTreeHelper.GetParent(current) as FrameworkElement;
             }
 
             if (clickedControl != null)
             {
-                // === 檢視模式：點擊播放視頻 ===
+                // ------------------------------------------------------
+                // 2a. 非編輯模式：點擊設備打開視頻播放器
+                // ------------------------------------------------------
                 if (!isEditMode)
                 {
                     OpenVideoPlayer(clickedControl.Device);
@@ -842,47 +1377,81 @@ namespace SentryX
                     return;
                 }
 
-                // === 編輯模式：原有的拖拽和調整大小邏輯 ===
+                // ------------------------------------------------------
+                // 2b. 編輯模式
+                // ------------------------------------------------------
                 if (isEditMode)
                 {
                     var localPoint = e.GetPosition(clickedControl);
-                    var handle = clickedControl.GetHandleAt(localPoint);
 
-                    if (handle != ResizeHandle.None)
+                    // 檢查是否點擊到設備縮放控制點
+                    var resizeHandle = clickedControl.GetHandleAt(localPoint);
+                    if (resizeHandle != ResizeHandle.None)
                     {
+                        // 縮放操作
                         isResizing = true;
-                        activeResizeHandle = handle;
+                        activeResizeHandle = resizeHandle;
                         resizeStartPoint = point;
                         initialWidth = clickedControl.Device.Width;
                         initialHeight = clickedControl.Device.Height;
+
                         MapCanvas.CaptureMouse();
                         e.Handled = true;
                         return;
                     }
 
-                    if (selectedControl != null && selectedControl != clickedControl)
+                    // 正常的選擇和拖動 (點擊設備圖標本體)
+                    if (selectedControl != clickedControl)
                     {
-                        selectedControl.HideSelection();
+                        // 如果選中了一個新設備，取消舊設備的選中狀態
+                        selectedControl?.HideSelection();
+                        if (selectedControl?.Device?.DeviceId != null)
+                        {
+                            fieldOfViewManager?.HideSelection(selectedControl.Device.DeviceId);
+                        }
+
+                        // 選中新設備
+                        selectedControl = clickedControl;
+                        selectedControl.ShowSelection();
+                        if (selectedControl.Device.DeviceId != null)
+                        {
+                            fieldOfViewManager?.ShowSelection(selectedControl.Device.DeviceId);
+                        }
+                        UpdateDevicePropertiesPanel();
                     }
 
-                    selectedControl = clickedControl;
-                    selectedControl.ShowSelection();
-
+                    // 開始拖曳
                     isDragging = true;
                     draggedControl = clickedControl;
                     dragStartPoint = point;
+
                     MapCanvas.CaptureMouse();
-                    e.Handled = true;
+                    e.Handled = true; // 標記為已處理，防止冒泡到 MapCanvas 的點擊空白處邏輯
                 }
             }
+            // ==========================================================
+            // 步驟三：點擊空白處 (clickedControl == null)
+            // ==========================================================
             else
             {
+                // ------------------------------------------------------
+                // 3a. 編輯模式下點擊空白區域：取消選中所有設備
+                // ------------------------------------------------------
                 if (selectedControl != null && isEditMode)
                 {
                     selectedControl.HideSelection();
+                    if (selectedControl.Device.DeviceId != null)
+                    {
+                        fieldOfViewManager?.HideSelection(selectedControl.Device.DeviceId);
+                    }
                     selectedControl = null;
+                    UpdateDevicePropertiesPanel();
+                    e.Handled = true;
                 }
 
+                // ------------------------------------------------------
+                // 3b. 非編輯模式下點擊空白處：拖動地圖
+                // ------------------------------------------------------
                 if (MapImage.Source != null && !isEditMode)
                 {
                     isDraggingMap = true;
@@ -961,6 +1530,89 @@ namespace SentryX
         {
             var currentPoint = e.GetPosition(MapCanvas);
 
+            // ✅ 視野調整邏輯
+            if (isAdjustingFieldOfView && selectedControl != null && activeFieldOfViewDeviceId != null)
+            {
+                var device = selectedControl.Device;
+                double centerX = device.X + device.Width / 2;
+                double centerY = device.Y + device.Height / 2;
+
+                double dx = currentPoint.X - centerX;
+                double dy = currentPoint.Y - centerY;
+
+                if (activeFieldOfViewHandleType == "Direction")
+                {
+                    double angle = Math.Atan2(dx, -dy) * 180 / Math.PI;
+                    if (angle < 0) angle += 360;
+
+                    double distance = Math.Sqrt(dx * dx + dy * dy);
+                    distance = Math.Max(20, distance);
+
+                    device.ViewDirection = angle;
+                    device.ViewDistance = distance;
+                    fieldOfViewManager?.UpdateFieldOfView(device);
+
+                    isUpdatingProperties = true;
+                    ViewDirectionTextBox.Text = angle.ToString("F0");
+                    ViewDistanceTextBox.Text = distance.ToString("F0");
+                    isUpdatingProperties = false;
+
+                    MousePositionText.Text = $"方向: {angle:F0}° 距離: {distance:F0}px";
+                }
+                else if (activeFieldOfViewHandleType == "LeftAngle")
+                {
+                    double angle = Math.Atan2(dx, -dy) * 180 / Math.PI;
+                    if (angle < 0) angle += 360;
+
+                    double angleDiff = angle - device.ViewDirection;
+                    while (angleDiff > 180) angleDiff -= 360;
+                    while (angleDiff < -180) angleDiff += 360;
+
+                    if (angleDiff < 0)
+                    {
+                        double newViewAngle = Math.Abs(angleDiff) * 2;
+                        newViewAngle = Math.Max(10, Math.Min(359.9, newViewAngle));
+
+                        device.ViewAngle = newViewAngle;
+                        fieldOfViewManager?.UpdateFieldOfView(device);
+
+                        isUpdatingProperties = true;
+                        ViewAngleTextBox.Text = newViewAngle.ToString("F0");
+                        isUpdatingProperties = false;
+
+                        MousePositionText.Text = $"視野角度: {newViewAngle:F0}°";
+                    }
+                }
+                else if (activeFieldOfViewHandleType == "RightAngle")
+                {
+                    double angle = Math.Atan2(dx, -dy) * 180 / Math.PI;
+                    if (angle < 0) angle += 360;
+
+                    double angleDiff = angle - device.ViewDirection;
+                    while (angleDiff > 180) angleDiff -= 360;
+                    while (angleDiff < -180) angleDiff += 360;
+
+                    if (angleDiff > 0)
+                    {
+                        double newViewAngle = Math.Abs(angleDiff) * 2;
+                        newViewAngle = Math.Max(10, Math.Min(359.9, newViewAngle));
+
+                        device.ViewAngle = newViewAngle;
+                        fieldOfViewManager?.UpdateFieldOfView(device);
+
+                        isUpdatingProperties = true;
+                        ViewAngleTextBox.Text = newViewAngle.ToString("F0");
+                        isUpdatingProperties = false;
+
+                        MousePositionText.Text = $"視野角度: {newViewAngle:F0}°";
+                    }
+                }
+
+                e.Handled = true;
+                return;
+            }
+
+            // 調整大小邏輯
             if (isResizing && selectedControl != null)
             {
                 var deltaX = currentPoint.X - resizeStartPoint.X;
@@ -1002,9 +1654,23 @@ namespace SentryX
                 }
 
                 selectedControl.UpdateSize(newWidth, newHeight);
+
+                // ✅ 更新視野位置
+                if (selectedControl.Device.DeviceId != null)
+                    fieldOfViewManager?.UpdateFieldOfView(selectedControl.Device);
+
+                isUpdatingProperties = true;
+                DeviceWidthTextBox.Text = newWidth.ToString("F0");
+                DeviceHeightTextBox.Text = newHeight.ToString("F0");
+                isUpdatingProperties = false;
+
                 MousePositionText.Text = $"大小: {newWidth:0} x {newHeight:0}";
+                e.Handled = true;
+                return;
             }
-            else if (isDragging && draggedControl != null)
+
+            // 拖動設備邏輯
+            if (isDragging && draggedControl != null)
             {
                 var offset = currentPoint - dragStartPoint;
                 dragStartPoint = currentPoint;
@@ -1019,11 +1685,24 @@ namespace SentryX
                 {
                     draggedControl.Device.X = newX;
                     draggedControl.Device.Y = newY;
+
+                    // ✅ 更新視野位置
+                    if (draggedControl.Device.DeviceId != null)
+                        fieldOfViewManager?.UpdateFieldOfView(draggedControl.Device);
+
+                    isUpdatingProperties = true;
+                    DeviceXTextBox.Text = newX.ToString("F0");
+                    DeviceYTextBox.Text = newY.ToString("F0");
+                    isUpdatingProperties = false;
                 }
 
                 MousePositionText.Text = $"座標: {newX:0}, {newY:0}";
+                e.Handled = true;
+                return;
             }
-            else if (isDraggingMap)
+
+            // 拖動地圖邏輯
+            if (isDraggingMap)
             {
                 var offset = currentPoint - dragStartPoint;
                 dragStartPoint = currentPoint;
@@ -1044,19 +1723,30 @@ namespace SentryX
                     {
                         control.Device.X = devLeft;
                         control.Device.Y = devTop;
+
+                        // ✅ 更新視野位置
+                        if (control.Device.DeviceId != null)
+                            fieldOfViewManager?.UpdateFieldOfView(control.Device);
                     }
                 }
 
                 MousePositionText.Text = $"底圖座標: {newMapLeft:0}, {newMapTop:0}";
+                e.Handled = true;
+                return;
             }
-            else
-            {
-                MousePositionText.Text = $"座標: {currentPoint.X:0}, {currentPoint.Y:0}";
-            }
+
+            MousePositionText.Text = $"座標: {currentPoint.X:0}, {currentPoint.Y:0}";
         }
 
         private void MapCanvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
         {
+            if (isAdjustingFieldOfView)
+            {
+                isAdjustingFieldOfView = false;
+                activeFieldOfViewHandleType = null;
+                activeFieldOfViewDeviceId = null;
+            }
+
             if (isResizing)
             {
                 isResizing = false;
@@ -1141,16 +1831,20 @@ namespace SentryX
                     var config = serializer.Deserialize(reader) as MapConfiguration
                         ?? throw new InvalidOperationException("反序列化 MapConfiguration 失敗。");
 
+                    // 清除現有設備
                     var existingDevices = MapCanvas.Children.OfType<DeviceControl>().ToList();
                     foreach (var dev in existingDevices)
                     {
+                        if (dev.Device?.DeviceId != null)
+                            fieldOfViewManager?.RemoveFieldOfView(dev.Device.DeviceId);
                         MapCanvas.Children.Remove(dev);
                     }
 
+                    // 載入地圖
                     if (!string.IsNullOrEmpty(config.MapImagePath) && File.Exists(config.MapImagePath))
                     {
                         MapImage.Source = new BitmapImage(new Uri(config.MapImagePath));
-                        MapInfoText.Text = $"地圖: {Path.GetFileName(config.MapImagePath)}";
+                        MapInfoText.Text = $"地圖: {IOPath.GetFileName(config.MapImagePath)}";
                     }
                     else
                     {
@@ -1159,6 +1853,7 @@ namespace SentryX
                         MessageBox.Show("載入的圖片路徑無效或檔案不存在。", "警告", MessageBoxButton.OK, MessageBoxImage.Warning);
                     }
 
+                    // 載入設備
                     foreach (var device in config.Devices)
                     {
                         if (device.X != 0 || device.Y != 0)
@@ -1169,7 +1864,12 @@ namespace SentryX
                             };
                             Canvas.SetLeft(deviceControl, device.X);
                             Canvas.SetTop(deviceControl, device.Y);
+                            Panel.SetZIndex(deviceControl, 1);
                             MapCanvas.Children.Add(deviceControl);
+
+                            // ✅ 創建視野
+                            if (device.DeviceId != null)
+                                fieldOfViewManager?.CreateFieldOfView(device);
                         }
                     }
 
@@ -1301,23 +2001,179 @@ namespace SentryX
                 });
             }
 
-            int deviceIndex = 1;
-            foreach (var control in MapCanvas.Children.OfType<DeviceControl>())
-            {
-                if (control.Device != null)
-                {
-                    layers.Add(new LayerItem
-                    {
-                        Name = $"設備層 {deviceIndex}: {control.Device.Name}",
-                        Element = control,
-                        Visibility = control.Visibility
-                    });
-                    deviceIndex++;
-                }
-            }
-
             LayersList.ItemsSource = null;
             LayersList.ItemsSource = layers;
+        }
+
+        // === 更新選中設備時調用 ===
+        private void UpdateDevicePropertiesPanel()
+        {
+            if (selectedControl != null && selectedControl.Device != null)
+            {
+                isUpdatingProperties = true;
+
+                DevicePropertiesPanel.IsEnabled = true;
+                SelectedDeviceNameText.Text = selectedControl.Device.Name;
+                SelectedDeviceNameText.Foreground = Brushes.Black;
+
+                DeviceXTextBox.Text = selectedControl.Device.X.ToString("F0");
+                DeviceYTextBox.Text = selectedControl.Device.Y.ToString("F0");
+                DeviceWidthTextBox.Text = selectedControl.Device.Width.ToString("F0");
+                DeviceHeightTextBox.Text = selectedControl.Device.Height.ToString("F0");
+
+                // 視野設置
+                ShowFieldOfViewCheckBox.IsChecked = selectedControl.Device.ShowFieldOfView;
+                ViewAngleTextBox.Text = selectedControl.Device.ViewAngle.ToString("F0");
+                ViewDistanceTextBox.Text = selectedControl.Device.ViewDistance.ToString("F0");
+                ViewDirectionTextBox.Text = selectedControl.Device.ViewDirection.ToString("F0");
+
+                isUpdatingProperties = false;
+            }
+            else
+            {
+                DevicePropertiesPanel.IsEnabled = false;
+                SelectedDeviceNameText.Text = "未選擇設備";
+                SelectedDeviceNameText.Foreground = Brushes.Gray;
+
+                DeviceXTextBox.Text = "0";
+                DeviceYTextBox.Text = "0";
+                DeviceWidthTextBox.Text = "60";
+                DeviceHeightTextBox.Text = "60";
+
+                ShowFieldOfViewCheckBox.IsChecked = true;
+                ViewAngleTextBox.Text = "90";
+                ViewDistanceTextBox.Text = "100";
+                ViewDirectionTextBox.Text = "0";
+            }
+        }
+
+        // 新增視野控制事件
+        private void ShowFieldOfViewCheckBox_Changed(object sender, RoutedEventArgs e)
+        {
+            if (isUpdatingProperties || selectedControl == null) return;
+
+            bool show = ShowFieldOfViewCheckBox.IsChecked == true;
+            selectedControl.Device.ShowFieldOfView = show;
+
+            // ✅ 使用視野管理器切換顯示
+            if (selectedControl.Device.DeviceId != null)
+                fieldOfViewManager?.ToggleFieldOfView(selectedControl.Device.DeviceId, show);
+        }
+
+        private void ViewAngleTextBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (isUpdatingProperties || selectedControl == null) return;
+
+            if (double.TryParse(ViewAngleTextBox.Text, out double angle))
+            {
+                angle = Math.Max(0, Math.Min(359.9, angle));
+                selectedControl.Device.ViewAngle = angle;
+
+                // ✅ 更新視野
+                if (selectedControl.Device.DeviceId != null)
+                    fieldOfViewManager?.UpdateFieldOfView(selectedControl.Device);
+            }
+        }
+
+        private void ViewDistanceTextBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (isUpdatingProperties || selectedControl == null) return;
+
+            if (double.TryParse(ViewDistanceTextBox.Text, out double distance))
+            {
+                distance = Math.Max(0, distance);
+                selectedControl.Device.ViewDistance = distance;
+
+                // ✅ 更新視野
+                if (selectedControl.Device.DeviceId != null)
+                    fieldOfViewManager?.UpdateFieldOfView(selectedControl.Device);
+            }
+        }
+
+        private void ViewDirectionTextBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (isUpdatingProperties || selectedControl == null) return;
+
+            if (double.TryParse(ViewDirectionTextBox.Text, out double direction))
+            {
+                direction = direction % 360;
+                if (direction < 0) direction += 360;
+
+                selectedControl.Device.ViewDirection = direction;
+
+                // ✅ 更新視野
+                if (selectedControl.Device.DeviceId != null)
+                    fieldOfViewManager?.UpdateFieldOfView(selectedControl.Device);
+            }
+        }
+
+        // === 座標文字框變更事件 ===
+        private void DevicePositionTextBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (isUpdatingProperties || selectedControl == null) return;
+
+            if (double.TryParse(DeviceXTextBox.Text, out double x) &&
+                double.TryParse(DeviceYTextBox.Text, out double y))
+            {
+                Canvas.SetLeft(selectedControl, x);
+                Canvas.SetTop(selectedControl, y);
+
+                selectedControl.Device.X = x;
+                selectedControl.Device.Y = y;
+
+                // ✅ 新增：更新視野位置
+                if (selectedControl.Device.DeviceId != null)
+                    fieldOfViewManager?.UpdateFieldOfView(selectedControl.Device);
+
+                MousePositionText.Text = $"座標: {x:0}, {y:0}";
+            }
+        }
+
+        // === 大小文字框變更事件 ===
+        private void DeviceSizeTextBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (isUpdatingProperties || selectedControl == null) return;
+
+            if (double.TryParse(DeviceWidthTextBox.Text, out double width) &&
+                double.TryParse(DeviceHeightTextBox.Text, out double height))
+            {
+                selectedControl.UpdateSize(width, height);
+
+                // ✅ 新增：更新視野位置（因為設備尺寸改變會影響中心點）
+                if (selectedControl.Device.DeviceId != null)
+                    fieldOfViewManager?.UpdateFieldOfView(selectedControl.Device);
+
+                MousePositionText.Text = $"大小: {width:0} x {height:0}";
+            }
+        }
+
+        // === 重置大小按鈕 ===
+        private void ResetSize_Click(object sender, RoutedEventArgs e)
+        {
+            if (selectedControl != null)
+            {
+                DeviceWidthTextBox.Text = "60";
+                DeviceHeightTextBox.Text = "60";
+            }
+        }
+
+        // === 對齊網格按鈕 ===
+        private void AlignToGrid_Click(object sender, RoutedEventArgs e)
+        {
+            if (selectedControl != null)
+            {
+                double gridSize = 10;
+
+                double x = Math.Round(selectedControl.Device.X / gridSize) * gridSize;
+                double y = Math.Round(selectedControl.Device.Y / gridSize) * gridSize;
+
+                DeviceXTextBox.Text = x.ToString("F0");
+                DeviceYTextBox.Text = y.ToString("F0");
+
+                // ✅ 注意：這裡不需要再次調用 UpdateFieldOfView
+                // 因為 DeviceXTextBox.Text 的改變會觸發 DevicePositionTextBox_TextChanged
+                // 那裡已經有更新視野的代碼了
+            }
         }
 
         protected override void OnClosed(EventArgs e)

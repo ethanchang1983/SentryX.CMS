@@ -205,31 +205,185 @@
                             <Image Name="MapImage" 
                                    Stretch="None"
                                    Canvas.Left="0"
-                                   Canvas.Top="0"/>
+                                   Canvas.Top="0"
+                                   Panel.ZIndex="0"/>
 
-                            <!-- 設備圖標將動態添加到這裡 -->
+                            <!-- 設備圖標將動態添加到這裡 (ZIndex=1) -->
+
+                            <!-- ✅ 新增：視野繪製層 (ZIndex=2) -->
+                            <!-- ✅ 視野繪製層 (ZIndex=2) - 不接收滑鼠事件 -->
+                            <Canvas Name="FieldOfViewCanvas"
+                                    Width="1000"
+                                    Height="1000"
+                                    Background="{x:Null}"
+                                    IsHitTestVisible="False"
+                                    Panel.ZIndex="2"
+                                    Canvas.Left="0"
+                                    Canvas.Top="0"/>
+
+                            <!-- ✅ 視野控制點層 (ZIndex=3) -->
+                            <Canvas Name="FieldOfViewHandlesCanvas"
+                                    Width="1000"
+                                    Height="1000"
+                                    Panel.ZIndex="3"
+                                    Canvas.Left="0"
+                                    Canvas.Top="0"/>
 
                         </Canvas>
                     </Grid>
                 </ScrollViewer>
             </GroupBox>
 
-            <!-- 右側：圖層設計器 -->
+            <!-- 右側：圖層設計器和設備屬性調整 -->
             <GroupBox Grid.Column="2" Header="圖層設計器" Margin="5">
-                <ListBox Name="LayersList" 
-                         Margin="5"
-                         SelectionMode="Single">
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
-                            <StackPanel Orientation="Horizontal">
-                                <CheckBox IsChecked="{Binding Visibility, Converter={StaticResource BoolToVisibilityConverter}, Mode=TwoWay}" 
-                                          Content="{Binding Name}" 
-                                          ToolTip="切換圖層可見性"/>
-                                <!-- 可以添加更多控制，如鎖定圖標等 -->
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="5"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- 圖層列表 -->
+                    <ListBox Name="LayersList" 
+                             Grid.Row="0"
+                             Margin="5"
+                             SelectionMode="Single">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal">
+                                    <CheckBox IsChecked="{Binding Visibility, Converter={StaticResource BoolToVisibilityConverter}, Mode=TwoWay}" 
+                                              Content="{Binding Name}" 
+                                              ToolTip="切換圖層可見性"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <!-- 分隔線 -->
+                    <GridSplitter Grid.Row="1" Height="5" 
+                                 HorizontalAlignment="Stretch" 
+                                 Background="Gray"
+                                 ResizeBehavior="PreviousAndNext"/>
+
+                    <!-- 設備屬性調整面板 -->
+                    <GroupBox Grid.Row="2" Header="設備屬性調整" 
+          Margin="5" Padding="5"
+          MinHeight="200">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <StackPanel Name="DevicePropertiesPanel" IsEnabled="False">
+
+                                <!-- 設備名稱顯示 -->
+                                <TextBlock Text="選中設備:" FontWeight="Bold" Margin="0,0,0,2"/>
+                                <TextBlock Name="SelectedDeviceNameText" 
+                      Text="未選擇設備" 
+                      Foreground="Gray"
+                      Margin="0,0,0,8"
+                      TextWrapping="Wrap"/>
+
+                                <!-- 位置調整 (X, Y 並排) -->
+                                <TextBlock Text="位置 (px):" FontWeight="Bold" Margin="0,5,0,2"/>
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="5"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="X:" FontSize="10" Margin="0,0,0,2"/>
+                                        <TextBox Name="DeviceXTextBox" 
+                            Text="0"
+                            TextChanged="DevicePositionTextBox_TextChanged"/>
+                                    </StackPanel>
+
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="Y:" FontSize="10" Margin="0,0,0,2"/>
+                                        <TextBox Name="DeviceYTextBox" 
+                            Text="0"
+                            TextChanged="DevicePositionTextBox_TextChanged"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <!-- 大小調整 (寬, 高 並排) -->
+                                <TextBlock Text="大小 (px):" FontWeight="Bold" Margin="0,5,0,2"/>
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="5"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="寬:" FontSize="10" Margin="0,0,0,2"/>
+                                        <TextBox Name="DeviceWidthTextBox" 
+                            Text="60"
+                            TextChanged="DeviceSizeTextBox_TextChanged"/>
+                                    </StackPanel>
+
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="高:" FontSize="10" Margin="0,0,0,2"/>
+                                        <TextBox Name="DeviceHeightTextBox" 
+                            Text="60"
+                            TextChanged="DeviceSizeTextBox_TextChanged"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <!-- 快速調整按鈕 -->
+                                <WrapPanel Margin="0,0,0,8">
+                                    <Button Content="重置 (60×60)" 
+                       Margin="0,0,5,0" Padding="5,2"
+                       Click="ResetSize_Click"
+                       ToolTip="重置為預設大小"/>
+                                    <Button Content="對齊網格" 
+                       Padding="5,2"
+                       Click="AlignToGrid_Click"
+                       ToolTip="對齊到 10px 網格"/>
+                                </WrapPanel>
+
+                                <!-- 視野設置 -->
+                                <Separator Margin="0,5,0,8"/>
+                                <CheckBox Name="ShowFieldOfViewCheckBox" 
+                      Content="顯示攝影機視野"
+                      FontWeight="Bold"
+                      Margin="0,0,0,8"
+                      Checked="ShowFieldOfViewCheckBox_Changed"
+                      Unchecked="ShowFieldOfViewCheckBox_Changed"/>
+
+                                <!-- 視野角度和距離 (並排) -->
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="5"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="角度 (°):" FontSize="10" Margin="0,0,0,2"/>
+                                        <TextBox Name="ViewAngleTextBox" 
+                            Text="90"
+                            TextChanged="ViewAngleTextBox_TextChanged"/>
+                                    </StackPanel>
+
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="距離 (px):" FontSize="10" Margin="0,0,0,2"/>
+                                        <TextBox Name="ViewDistanceTextBox" 
+                            Text="100"
+                            TextChanged="ViewDistanceTextBox_TextChanged"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <!-- 視野方向 -->
+                                <TextBlock Text="方向 (°):" FontSize="10" Margin="0,0,0,2"/>
+                                <TextBox Name="ViewDirectionTextBox" 
+                    Text="0" 
+                    Margin="0,0,0,5"
+                    TextChanged="ViewDirectionTextBox_TextChanged"/>
+
                             </StackPanel>
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
+                        </ScrollViewer>
+                    </GroupBox>
+
+                </Grid>
             </GroupBox>
         </Grid>
 

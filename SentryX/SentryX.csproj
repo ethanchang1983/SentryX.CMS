@@ -21,6 +21,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <None Remove="Resources\camera_icon.png" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="WpfAnimatedGif" Version="2.0.2" />
   </ItemGroup>
 	
@@ -28,6 +32,12 @@
 
   <ItemGroup>
     <ProjectReference Include="..\NetSDKCS\NetSDKCS.csproj" />
+  </ItemGroup>
+	
+
+
+  <ItemGroup>
+    <Resource Include="Resources\camera_icon.png" />
   </ItemGroup>
 
 </Project>
